@@ -72,12 +72,13 @@ with tab1:
 
         # 贡献者选择列表
         medals = {1: "🥇", 2: "🥈", 3: "🥉"}
-        options = [
-            f"{medals.get(int(r['rank']), f'#{int(r[\"rank\"])}')}"
-            f"  {r['login']}"
-            + (f"  ({r['name']})" if r.get("name") else "")
-            for _, r in filtered.iterrows()
-        ]
+        def _label(r):
+            rank = int(r["rank"])
+            prefix = medals.get(rank, f"#{rank}")
+            name_part = f"  ({r['name']})" if r.get("name") else ""
+            return f"{prefix}  {r['login']}{name_part}"
+
+        options = [_label(r) for _, r in filtered.iterrows()]
 
         if not options:
             st.info("无匹配结果")
