@@ -24,6 +24,7 @@ def _get_cursor():
     conn = psycopg2.connect(
         _get_database_url(),
         cursor_factory=psycopg2.extras.RealDictCursor,
+        sslmode="require",
     )
     cur = conn.cursor()
     try:
