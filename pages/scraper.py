@@ -19,9 +19,15 @@ with st.sidebar:
     st.title("🐙 GH Contributor Analyzer")
     st.markdown("---")
 
+    def _default_token() -> str:
+        try:
+            return st.secrets.get("GITHUB_TOKEN", "") or os.getenv("GITHUB_TOKEN", "")
+        except Exception:
+            return os.getenv("GITHUB_TOKEN", "")
+
     token = st.text_input(
         "GitHub Token",
-        value=os.getenv("GITHUB_TOKEN", ""),
+        value=_default_token(),
         type="password",
         placeholder="ghp_xxxxxxxxxxxx",
     )

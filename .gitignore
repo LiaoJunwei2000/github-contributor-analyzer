@@ -1,9 +1,10 @@
 .env
 .venv/
+venv/
 *.csv
 __pycache__/
 *.pyc
-.venv/
-venv/
 dist/
 *.egg-info/
+contributors.db
+.streamlit/secrets.toml

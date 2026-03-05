@@ -22,6 +22,11 @@ history = st.Page(
     title="历史数据",
     icon="📂",
 )
+manual = st.Page(
+    "pages/manual.py",
+    title="使用手册",
+    icon="📖",
+)
 
-pg = st.navigation([scraper, history])
+pg = st.navigation([scraper, history, manual])
 pg.run()

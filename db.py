@@ -1,72 +1,105 @@
-import sqlite3
 import os
+from contextlib import contextmanager
+from datetime import datetime
 from typing import List, Dict, Any
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "contributors.db")
+import psycopg2
+import psycopg2.extras
 
 
-def get_conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH, timeout=10)
-    conn.row_factory = sqlite3.Row
-    return conn
+def _get_database_url() -> str:
+    try:
+        import streamlit as st
+        return st.secrets["DATABASE_URL"]
+    except Exception:
+        return os.getenv("DATABASE_URL", "")
+
+
+def _now() -> str:
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+@contextmanager
+def _get_cursor():
+    conn = psycopg2.connect(
+        _get_database_url(),
+        cursor_factory=psycopg2.extras.RealDictCursor,
+    )
+    cur = conn.cursor()
+    try:
+        yield cur
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
 
 
 def init_db():
-    with get_conn() as conn:
-        conn.executescript("""
+    with _get_cursor() as cur:
+        cur.execute("""
             CREATE TABLE IF NOT EXISTS repos (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                id          SERIAL PRIMARY KEY,
                 full_name   TEXT UNIQUE NOT NULL,
                 description TEXT,
                 stars       INTEGER,
                 forks       INTEGER,
                 watchers    INTEGER,
                 language    TEXT,
-                scraped_at  TEXT DEFAULT (datetime('now', 'localtime'))
-            );
-
+                scraped_at  TEXT
+            )
+        """)
+        cur.execute("""
             CREATE TABLE IF NOT EXISTS contributors (
-                id                            INTEGER PRIMARY KEY AUTOINCREMENT,
-                repo_full_name                TEXT NOT NULL,
-                rank                          INTEGER,
-                login                         TEXT NOT NULL,
-                user_id                       INTEGER,
-                name                          TEXT,
-                company                       TEXT,
-                location                      TEXT,
-                email                         TEXT,
-                blog                          TEXT,
-                twitter_username              TEXT,
-                hireable                      INTEGER,
-                bio                           TEXT,
-                public_repos                  INTEGER,
-                public_gists                  INTEGER,
-                followers                     INTEGER,
-                following                     INTEGER,
-                total_commits                 INTEGER,
-                total_additions               INTEGER,
-                total_deletions               INTEGER,
-                net_lines                     INTEGER,
-                total_changes                 INTEGER,
-                avg_changes_per_commit        REAL,
-                addition_deletion_ratio       REAL,
+                id                              SERIAL PRIMARY KEY,
+                repo_full_name                  TEXT NOT NULL,
+                rank                            INTEGER,
+                login                           TEXT NOT NULL,
+                user_id                         INTEGER,
+                name                            TEXT,
+                company                         TEXT,
+                location                        TEXT,
+                email                           TEXT,
+                blog                            TEXT,
+                twitter_username                TEXT,
+                hireable                        INTEGER,
+                bio                             TEXT,
+                public_repos                    INTEGER,
+                public_gists                    INTEGER,
+                followers                       INTEGER,
+                following                       INTEGER,
+                total_commits                   INTEGER,
+                total_additions                 INTEGER,
+                total_deletions                 INTEGER,
+                net_lines                       INTEGER,
+                total_changes                   INTEGER,
+                avg_changes_per_commit          REAL,
+                addition_deletion_ratio         REAL,
                 contributions_on_default_branch INTEGER,
-                profile_url                   TEXT,
-                avatar_url                    TEXT,
-                account_created               TEXT,
-                last_updated                  TEXT,
-                scraped_at                    TEXT DEFAULT (datetime('now', 'localtime')),
+                profile_url                     TEXT,
+                avatar_url                      TEXT,
+                account_created                 TEXT,
+                last_updated                    TEXT,
+                scraped_at                      TEXT,
                 UNIQUE(repo_full_name, login)
-            );
+            )
         """)
 
 
 def save_repo(details: Dict[str, Any]):
-    with get_conn() as conn:
-        conn.execute("""
-            INSERT OR REPLACE INTO repos
-                (full_name, description, stars, forks, watchers, language, scraped_at)
-            VALUES (?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))
+    with _get_cursor() as cur:
+        cur.execute("""
+            INSERT INTO repos (full_name, description, stars, forks, watchers, language, scraped_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (full_name) DO UPDATE SET
+                description = EXCLUDED.description,
+                stars       = EXCLUDED.stars,
+                forks       = EXCLUDED.forks,
+                watchers    = EXCLUDED.watchers,
+                language    = EXCLUDED.language,
+                scraped_at  = EXCLUDED.scraped_at
         """, (
             details.get("full_name"),
             details.get("description"),
@@ -74,26 +107,54 @@ def save_repo(details: Dict[str, Any]):
             details.get("forks_count"),
             details.get("subscribers_count"),
             details.get("language"),
+            _now(),
         ))
 
 
 def save_contributors(repo_full_name: str, contributors: List[Dict[str, Any]]):
-    with get_conn() as conn:
+    with _get_cursor() as cur:
         for c in contributors:
-            conn.execute("""
-                INSERT OR REPLACE INTO contributors (
+            cur.execute("""
+                INSERT INTO contributors (
                     repo_full_name, rank, login, user_id, name, company, location,
                     email, blog, twitter_username, hireable, bio,
                     public_repos, public_gists, followers, following,
                     total_commits, total_additions, total_deletions,
                     net_lines, total_changes, avg_changes_per_commit,
                     addition_deletion_ratio, contributions_on_default_branch,
-                    profile_url, avatar_url, account_created, last_updated,
-                    scraped_at
+                    profile_url, avatar_url, account_created, last_updated, scraped_at
                 ) VALUES (
-                    ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
-                    datetime('now', 'localtime')
+                    %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
+                    %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s
                 )
+                ON CONFLICT (repo_full_name, login) DO UPDATE SET
+                    rank = EXCLUDED.rank,
+                    user_id = EXCLUDED.user_id,
+                    name = EXCLUDED.name,
+                    company = EXCLUDED.company,
+                    location = EXCLUDED.location,
+                    email = EXCLUDED.email,
+                    blog = EXCLUDED.blog,
+                    twitter_username = EXCLUDED.twitter_username,
+                    hireable = EXCLUDED.hireable,
+                    bio = EXCLUDED.bio,
+                    public_repos = EXCLUDED.public_repos,
+                    public_gists = EXCLUDED.public_gists,
+                    followers = EXCLUDED.followers,
+                    following = EXCLUDED.following,
+                    total_commits = EXCLUDED.total_commits,
+                    total_additions = EXCLUDED.total_additions,
+                    total_deletions = EXCLUDED.total_deletions,
+                    net_lines = EXCLUDED.net_lines,
+                    total_changes = EXCLUDED.total_changes,
+                    avg_changes_per_commit = EXCLUDED.avg_changes_per_commit,
+                    addition_deletion_ratio = EXCLUDED.addition_deletion_ratio,
+                    contributions_on_default_branch = EXCLUDED.contributions_on_default_branch,
+                    profile_url = EXCLUDED.profile_url,
+                    avatar_url = EXCLUDED.avatar_url,
+                    account_created = EXCLUDED.account_created,
+                    last_updated = EXCLUDED.last_updated,
+                    scraped_at = EXCLUDED.scraped_at
             """, (
                 repo_full_name,
                 c.get("rank"), c.get("login"), c.get("user_id"),
@@ -108,27 +169,26 @@ def save_contributors(repo_full_name: str, contributors: List[Dict[str, Any]]):
                 c.get("contributions_on_default_branch"),
                 c.get("profile_url"), c.get("avatar_url"),
                 c.get("account_created"), c.get("last_updated"),
+                _now(),
             ))
 
 
 def list_repos() -> List[Dict]:
-    with get_conn() as conn:
-        rows = conn.execute(
-            "SELECT * FROM repos ORDER BY scraped_at DESC"
-        ).fetchall()
-        return [dict(r) for r in rows]
+    with _get_cursor() as cur:
+        cur.execute("SELECT * FROM repos ORDER BY scraped_at DESC")
+        return [dict(r) for r in cur.fetchall()]
 
 
 def get_contributors(repo_full_name: str) -> List[Dict]:
-    with get_conn() as conn:
-        rows = conn.execute(
-            "SELECT * FROM contributors WHERE repo_full_name = ? ORDER BY rank ASC",
+    with _get_cursor() as cur:
+        cur.execute(
+            "SELECT * FROM contributors WHERE repo_full_name = %s ORDER BY rank ASC",
             (repo_full_name,),
-        ).fetchall()
-        return [dict(r) for r in rows]
+        )
+        return [dict(r) for r in cur.fetchall()]
 
 
 def delete_repo(repo_full_name: str):
-    with get_conn() as conn:
-        conn.execute("DELETE FROM contributors WHERE repo_full_name = ?", (repo_full_name,))
-        conn.execute("DELETE FROM repos WHERE full_name = ?", (repo_full_name,))
+    with _get_cursor() as cur:
+        cur.execute("DELETE FROM contributors WHERE repo_full_name = %s", (repo_full_name,))
+        cur.execute("DELETE FROM repos WHERE full_name = %s", (repo_full_name,))
