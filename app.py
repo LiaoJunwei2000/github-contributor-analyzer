@@ -1,5 +1,7 @@
+import os
 import streamlit as st
 import pandas as pd
+from dotenv import load_dotenv
 from main import (
     fetch_repo_details,
     fetch_all_contributors,
@@ -8,6 +10,8 @@ from main import (
     enrich_with_user_details,
     CSV_FIELDS,
 )
+
+load_dotenv()
 
 st.set_page_config(
     page_title="GitHub Contributor Analyzer",
@@ -20,7 +24,12 @@ with st.sidebar:
     st.title("🐙 GH Contributor Analyzer")
     st.markdown("---")
 
-    token = st.text_input("GitHub Token", type="password", placeholder="ghp_xxxxxxxxxxxx")
+    token = st.text_input(
+        "GitHub Token",
+        value=os.getenv("GITHUB_TOKEN", ""),
+        type="password",
+        placeholder="ghp_xxxxxxxxxxxx",
+    )
     st.caption("需要 `public_repo` 权限。[创建 Token ↗](https://github.com/settings/tokens/new)")
 
     st.markdown("---")
