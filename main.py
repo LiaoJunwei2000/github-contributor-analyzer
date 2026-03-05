@@ -207,10 +207,15 @@ def merge_contrib_and_stats(all_contribs: List[Dict[str, Any]], stats: Optional[
 
     return rows
 
-def enrich_with_user_details(rows: List[Dict[str, Any]], token: str) -> List[Dict[str, Any]]:
-    """并发补全用户 profile 字段。"""
+def enrich_with_user_details(
+    rows: List[Dict[str, Any]],
+    token: str,
+    skip_logins: set = None,
+) -> List[Dict[str, Any]]:
+    """并发补全用户 profile 字段。skip_logins 中的用户跳过 API 请求（续传用）。"""
+    skip = set(skip_logins or [])
     out = [dict(r) for r in rows]
-    login_to_row_map = {r['login']: r for r in out if r.get('login')}
+    login_to_row_map = {r['login']: r for r in out if r.get('login') and r['login'] not in skip}
 
     with ThreadPoolExecutor(max_workers=USER_DETAILS_CONCURRENCY) as ex:
         futures = {ex.submit(fetch_user_detail, login, token): login for login in login_to_row_map.keys()}

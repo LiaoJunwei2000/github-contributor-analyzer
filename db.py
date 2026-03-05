@@ -277,6 +277,17 @@ def save_contributors(repo_full_name: str, contributors: List[Dict[str, Any]]):
                 """, vals)
 
 
+def get_complete_profiles(repo_full_name: str) -> Dict[str, Dict]:
+    """返回该仓库已有完整 Profile 的贡献者（followers 不为空），用于续传跳过。"""
+    p = _ph()
+    with _get_cursor() as cur:
+        cur.execute(
+            f"SELECT * FROM contributors WHERE repo_full_name = {p} AND followers IS NOT NULL",
+            (repo_full_name,),
+        )
+        return {row["login"]: dict(row) for row in cur.fetchall()}
+
+
 def list_repos() -> List[Dict]:
     with _get_cursor() as cur:
         cur.execute("SELECT * FROM repos ORDER BY scraped_at DESC")
