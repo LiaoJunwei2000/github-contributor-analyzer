@@ -35,13 +35,25 @@
 
 ---
 
-## 快速开始
+## 分支说明
 
-### 1. 克隆项目
+| 分支 | 环境 | 数据库 |
+|------|------|--------|
+| `dev` | 本地开发 | SQLite（自动创建 `contributors.db`） |
+| `main` | Streamlit Cloud 生产环境 | Supabase PostgreSQL |
+
+数据库自动切换：有 `DATABASE_URL` 用 PostgreSQL，否则用 SQLite，无需手动配置。
+
+---
+
+## 快速开始（本地开发）
+
+### 1. 克隆并切换到 dev 分支
 
 ```bash
 git clone https://github.com/LiaoJunwei2000/github-contributor-analyzer.git
 cd github-contributor-analyzer
+git checkout dev
 ```
 
 ### 2. 安装依赖
@@ -54,15 +66,17 @@ pip install -r requirements.txt
 
 ### 3. 配置 GitHub Token
 
-在项目根目录创建 `.env` 文件：
+```bash
+cp .streamlit/secrets.toml.example .streamlit/secrets.toml
+```
 
-```env
-GITHUB_TOKEN=ghp_your_token_here
+编辑 `.streamlit/secrets.toml`，只需填入 GitHub Token（本地不需要 `DATABASE_URL`）：
+
+```toml
+GITHUB_TOKEN = "ghp_your_token_here"
 ```
 
 > Token 需要 `public_repo` 权限。[点击创建 →](https://github.com/settings/tokens/new)
->
-> 未配置 Token 时 API 限制为 60 次/小时，分析大型仓库请务必配置。
 
 ### 4. 启动应用
 
@@ -70,7 +84,7 @@ GITHUB_TOKEN=ghp_your_token_here
 streamlit run app.py
 ```
 
-浏览器访问 `http://localhost:8501`
+浏览器访问 `http://localhost:8501`，数据自动存入本地 `contributors.db`。
 
 ---
 
@@ -347,30 +361,41 @@ main（受保护，只接受 PR 合并）
 ### 第一步：创建 Supabase 数据库
 
 1. 注册 [supabase.com](https://supabase.com)，创建新项目
-2. 进入 **Project Settings → Database → Connection string → URI**，复制连接字符串（格式如下）：
+2. 进入项目后点击顶部 **Connect 按钮**
+3. 选择 **Session Mode**（支持 IPv4，兼容 Streamlit Cloud），复制 URI：
    ```
-   postgresql://postgres:[YOUR-PASSWORD]@db.[YOUR-PROJECT-REF].supabase.co:5432/postgres
+   postgresql://postgres.[project-ref]:[password]@aws-0-[region].pooler.supabase.com:5432/postgres
    ```
-3. 无需手动建表，应用启动时 `init_db()` 会自动创建
+   > ⚠️ 不要用 Direct Connection（仅 IPv6，Streamlit Cloud 不兼容）
+
+4. 无需手动建表，应用启动时 `init_db()` 会自动创建
 
 ### 第二步：部署到 Streamlit Community Cloud
 
-1. 将代码推送到 GitHub（确保 `secrets.toml` 在 `.gitignore` 中）
+1. 将 `main` 分支推送到 GitHub（确保 `secrets.toml` 在 `.gitignore` 中）
 2. 登录 [share.streamlit.io](https://share.streamlit.io)，点击 **New app**
-3. 选择你的 GitHub 仓库，入口文件填 `app.py`
+3. 选择仓库，Branch 选 **main**，入口文件填 `app.py`
 4. 点击 **Advanced settings → Secrets**，填入以下内容：
    ```toml
-   DATABASE_URL = "postgresql://postgres:密码@db.你的项目ID.supabase.co:5432/postgres"
+   DATABASE_URL = "postgresql://postgres.你的项目ID:密码@aws-0-区域.pooler.supabase.com:5432/postgres"
    GITHUB_TOKEN = "ghp_你的token"
    ```
 5. 点击 **Deploy** 即可
 
-### 本地开发配置
+### 日常开发流程
 
 ```bash
-cp .streamlit/secrets.toml.example .streamlit/secrets.toml
-# 编辑 .streamlit/secrets.toml，填入 Supabase 连接字符串和 GitHub Token
-streamlit run app.py
+# 在 dev 分支开发和测试
+git checkout dev
+# ... 修改代码 ...
+git add . && git commit -m "feat: xxx"
+git push
+
+# 测试通过后合并到 main 触发云端更新
+git checkout main
+git merge dev
+git push
+git checkout dev
 ```
 
 > `.streamlit/secrets.toml` 已在 `.gitignore` 中，不会上传到 GitHub。
