@@ -2,6 +2,7 @@ import os
 import streamlit as st
 import pandas as pd
 from dotenv import load_dotenv
+from db import init_db, save_repo, save_contributors
 from main import (
     fetch_repo_details,
     fetch_all_contributors,
@@ -12,6 +13,7 @@ from main import (
 )
 
 load_dotenv()
+init_db()
 
 st.set_page_config(
     page_title="GitHub Contributor Analyzer",
@@ -163,6 +165,11 @@ if run_btn:
         st.write(f"🔍 并发抓取 {len(merged)} 位用户的 Profile 信息...")
         enriched = enrich_with_user_details(merged, token)
 
+        # 存库
+        st.write("💾 正在保存到本地数据库...")
+        save_repo(details)
+        save_contributors(details["full_name"], enriched)
+
         status.update(label="分析完成 ✅", state="complete", expanded=False)
 
     # ============ 展示结果 ============
@@ -231,6 +238,8 @@ if run_btn:
         mime="text/csv",
         type="primary",
     )
+    st.success("✅ 数据已保存到本地数据库，前往「📊 看板」页面查看分析图表。")
+
     st.caption(
         f"CSV 包含 {len(CSV_FIELDS)} 个字段：rank、login、name、company、location、**email**、"
         "**blog**、**twitter_username**、hireable、public_repos、public_gists、followers、following、"
