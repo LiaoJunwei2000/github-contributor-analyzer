@@ -8,11 +8,21 @@ import psycopg2.extras
 
 
 def _get_database_url() -> str:
+    url = ""
     try:
         import streamlit as st
-        return st.secrets["DATABASE_URL"]
+        url = st.secrets.get("DATABASE_URL", "")
     except Exception:
-        return os.getenv("DATABASE_URL", "")
+        pass
+    if not url:
+        url = os.getenv("DATABASE_URL", "")
+    if not url:
+        raise RuntimeError(
+            "DATABASE_URL 未配置。\n"
+            "本地：在 .streamlit/secrets.toml 中设置 DATABASE_URL\n"
+            "云端：在 Streamlit Cloud → App Settings → Secrets 中设置 DATABASE_URL"
+        )
+    return url
 
 
 def _now() -> str:
