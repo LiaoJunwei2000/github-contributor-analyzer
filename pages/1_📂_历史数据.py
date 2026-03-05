@@ -17,36 +17,40 @@ if not repos:
     st.stop()
 
 # ── 仓库选择 + 元信息 ─────────────────────────────────────
-col_sel, col_info = st.columns([2, 3])
+col_sel, col_stars, col_forks, col_lang, col_time = st.columns([3, 1, 1, 1, 2])
 
 with col_sel:
-    repo_options = {
-        f"{r['full_name']}": r for r in repos
-    }
+    repo_options = {f"{r['full_name']}": r for r in repos}
     selected_name = st.selectbox(
         "选择仓库",
         list(repo_options.keys()),
         format_func=lambda x: f"📦 {x}",
     )
     repo_meta = repo_options[selected_name]
-
-with col_info:
-    st.markdown(f"""
-    **{repo_meta['full_name']}**
-    ⭐ {repo_meta.get('stars', 0):,} &nbsp; 🍴 {repo_meta.get('forks', 0):,} &nbsp;
-    🌐 {repo_meta.get('language') or 'N/A'} &nbsp;
-    📅 采集于 `{str(repo_meta.get('scraped_at', ''))[:16]}`
-    """)
     if repo_meta.get("description"):
         st.caption(repo_meta["description"])
 
-# 危险操作：删除
+with col_stars:
+    st.metric("⭐ Stars", f"{repo_meta.get('stars', 0):,}")
+
+with col_forks:
+    st.metric("🍴 Forks", f"{repo_meta.get('forks', 0):,}")
+
+with col_lang:
+    st.metric("🌐 语言", repo_meta.get("language") or "N/A")
+
+with col_time:
+    st.metric("📅 采集时间", str(repo_meta.get("scraped_at", ""))[:16])
+
+# 危险操作：删除（checkbox 确认后才显示删除按钮）
 with st.expander("⚠️ 危险操作"):
     st.warning(f"删除后将移除 **{selected_name}** 的全部贡献者记录，不可恢复。")
-    if st.button("🗑️ 删除此仓库数据", type="secondary"):
-        delete_repo(selected_name)
-        st.success("已删除，请刷新页面。")
-        st.stop()
+    confirm = st.checkbox(f"我确认要删除 **{selected_name}** 的所有数据", key="confirm_delete")
+    if confirm:
+        if st.button("🗑️ 确认删除此仓库数据", type="secondary"):
+            delete_repo(selected_name)
+            st.success("已删除！")
+            st.rerun()
 
 st.markdown("---")
 
@@ -98,16 +102,23 @@ with tab1:
         medals = {1: "🥇", 2: "🥈", 3: "🥉"}
 
         def make_label(r):
-            rank = int(r["rank"])
+            try:
+                rank = int(r["rank"])
+            except (ValueError, TypeError):
+                rank = 0
             prefix = medals.get(rank, f"#{rank}")
-            name_part = f"  ({r['name']})" if r.get("name") else ""
-            return f"{prefix}  {r['login']}{name_part}"
+            raw_name = r.get("name")
+            name_part = f"  ({raw_name})" if raw_name and str(raw_name) not in ("None", "") else ""
+            login = str(r["login"]) if r.get("login") else "unknown"
+            return f"{prefix}  {login}{name_part}"
 
         options = [make_label(r) for _, r in filtered.iterrows()]
 
         if not options:
             st.info("无匹配结果")
         else:
+            if len(options) > 10:
+                st.caption("↕ 可滚动")
             selected_idx = st.radio(
                 "点击查看详情",
                 range(len(options)),
@@ -127,37 +138,60 @@ with tab1:
                 with info_col:
                     display_name = person.get("name") or person["login"]
                     st.markdown(f"### {display_name}")
-                    st.markdown(f"**@{person['login']}**  ·  排名 #{int(person['rank'])}")
+                    try:
+                        rank_display = int(person["rank"])
+                    except (ValueError, TypeError):
+                        rank_display = "?"
+                    st.markdown(f"**@{person['login']}**  ·  排名 #{rank_display}")
                     if person.get("bio"):
                         st.caption(person["bio"])
 
                 st.markdown("---")
-                detail_cols = st.columns(2)
-                fields = [
-                    ("🏢 公司", "company"), ("📍 地区", "location"),
-                    ("📧 邮箱", "email"), ("🌐 主页", "blog"),
-                    ("🐦 Twitter", "twitter_username"), ("💼 开放求职", "hireable"),
-                ]
-                for i, (label, key) in enumerate(fields):
-                    val = person.get(key)
-                    if val and str(val) not in ("None", "0", ""):
-                        display_val = "是" if key == "hireable" and val else str(val)
-                        detail_cols[i % 2].markdown(f"**{label}**  \n{display_val}")
+
+                with st.container(border=True):
+                    detail_cols = st.columns(2)
+                    fields = [
+                        ("🏢 公司", "company"), ("📍 地区", "location"),
+                        ("📧 邮箱", "email"), ("🐦 Twitter", "twitter_username"),
+                    ]
+                    for i, (label, key) in enumerate(fields):
+                        val = person.get(key)
+                        if val and str(val) not in ("None", "0", ""):
+                            detail_cols[i % 2].markdown(f"**{label}**  \n{val}")
+
+                    # hireable 显示
+                    hireable_val = person.get("hireable")
+                    try:
+                        hireable_int = int(hireable_val) if hireable_val is not None else 0
+                    except (ValueError, TypeError):
+                        hireable_int = 0
+                    hire_display = "✅ 开放求职" if hireable_int == 1 else "—"
+                    detail_cols[0].markdown(f"**💼 求职状态**  \n{hire_display}")
+
+                    blog_val = person.get("blog")
+                    if blog_val and str(blog_val) not in ("None", ""):
+                        detail_cols[1].markdown(f"**🌐 主页**  \n{blog_val}")
 
                 if person.get("profile_url"):
-                    st.markdown(f"[🔗 GitHub 主页]({person['profile_url']})")
+                    st.link_button("🔗 查看 GitHub 主页", person["profile_url"])
 
                 st.markdown("---")
                 st.markdown("#### 代码贡献")
                 m1, m2, m3, m4 = st.columns(4)
-                m1.metric("Commits", f"{int(person.get('total_commits', 0)):,}")
-                m2.metric("新增行", f"{int(person.get('total_additions', 0)):,}")
-                m3.metric("删除行", f"{int(person.get('total_deletions', 0)):,}")
-                m4.metric("净增行", f"{int(person.get('net_lines', 0)):,}")
+                try:
+                    m1.metric("Commits", f"{int(person.get('total_commits', 0)):,}")
+                    m2.metric("新增行", f"{int(person.get('total_additions', 0)):,}")
+                    m3.metric("删除行", f"{int(person.get('total_deletions', 0)):,}")
+                    m4.metric("净增行", f"{int(person.get('net_lines', 0)):,}")
+                except (ValueError, TypeError):
+                    pass
                 m5, m6, m7, _ = st.columns(4)
-                m5.metric("Followers", f"{int(person.get('followers', 0)):,}")
-                m6.metric("公开 Repos", f"{int(person.get('public_repos', 0)):,}")
-                m7.metric("默认分支贡献", f"{int(person.get('contributions_on_default_branch', 0)):,}")
+                try:
+                    m5.metric("Followers", f"{int(person.get('followers', 0)):,}")
+                    m6.metric("公开 Repos", f"{int(person.get('public_repos', 0)):,}")
+                    m7.metric("默认分支贡献", f"{int(person.get('contributions_on_default_branch', 0)):,}")
+                except (ValueError, TypeError):
+                    pass
 
                 st.markdown("#### 贡献指标对比（与 Top10 均值）")
                 top10 = df.nsmallest(10, "rank")
@@ -183,19 +217,22 @@ with tab1:
                     height=280,
                 )
                 fig_bar.update_layout(margin=dict(t=10, b=10), legend_title_text="")
-                st.plotly_chart(fig_bar, use_container_width=True)
+                st.plotly_chart(fig_bar, use_container_width=True, config={"displayModeBar": False})
 
 
 # ──────────────────────────────────────────────────────────
 # TAB 2：多维分析
 # ──────────────────────────────────────────────────────────
 with tab2:
+    num_contributors = len(df)
+    num_with_location = int(df["location"].notna().sum())
+
     o1, o2, o3, o4, o5 = st.columns(5)
-    o1.metric("贡献者总数", f"{len(df):,}")
-    o2.metric("总 Commits", f"{int(df['total_commits'].sum()):,}")
+    o1.metric("贡献者总数", f"{num_contributors:,}")
+    o2.metric("总 Commits", f"{int(df['total_commits'].sum()):,}", f"共 {num_contributors} 人贡献")
     o3.metric("总新增行", f"{int(df['total_additions'].sum()):,}")
     o4.metric("总删除行", f"{int(df['total_deletions'].sum()):,}")
-    o5.metric("有地区信息", f"{df['location'].notna().sum()} 人")
+    o5.metric("有地区信息", f"{num_with_location} 人", f"占 {num_with_location / max(num_contributors, 1):.0%}")
 
     st.markdown("---")
 
@@ -216,7 +253,7 @@ with tab2:
                 labels={"company": ""}, height=400,
             )
             fig_company.update_layout(yaxis=dict(autorange="reversed"), margin=dict(t=10))
-            st.plotly_chart(fig_company, use_container_width=True)
+            st.plotly_chart(fig_company, use_container_width=True, config={"displayModeBar": False})
         else:
             st.info("无公司信息数据")
 
@@ -229,14 +266,24 @@ with tab2:
             color_discrete_sequence=["#4f8bff"], height=400,
         )
         fig_hist.update_layout(bargap=0.05, margin=dict(t=10), yaxis_title="人数")
-        st.plotly_chart(fig_hist, use_container_width=True)
+        st.plotly_chart(fig_hist, use_container_width=True, config={"displayModeBar": False})
 
     col3, col4 = st.columns(2)
     with col3:
         st.markdown("#### 🌍 地区分布（Top 15）")
         loc_df = df[df["location"].notna() & (df["location"] != "")].copy()
         if not loc_df.empty:
-            loc_df["region"] = loc_df["location"].str.strip().str.split(",").str[-1].str.strip()
+            def extract_region(loc):
+                parts = str(loc).split(",")
+                region = parts[-1].strip()
+                # 去除纯数字或空白部分，尝试上一段
+                import re
+                if re.match(r"^\d[\d\s\-]*$", region) or region == "":
+                    region = parts[-2].strip() if len(parts) >= 2 else region
+                return region
+
+            loc_df["region"] = loc_df["location"].apply(extract_region)
+            loc_df = loc_df[loc_df["region"] != ""]
             region_counts = (
                 loc_df.groupby("region").agg(人数=("login", "count"))
                 .sort_values("人数", ascending=False).head(15).reset_index()
@@ -250,7 +297,7 @@ with tab2:
                 yaxis=dict(autorange="reversed"),
                 coloraxis_showscale=False, margin=dict(t=10),
             )
-            st.plotly_chart(fig_loc, use_container_width=True)
+            st.plotly_chart(fig_loc, use_container_width=True, config={"displayModeBar": False})
         else:
             st.info("无地区信息数据")
 
@@ -268,13 +315,13 @@ with tab2:
                 height=400,
             )
             fig_scatter.update_layout(margin=dict(t=10))
-            st.plotly_chart(fig_scatter, use_container_width=True)
+            st.plotly_chart(fig_scatter, use_container_width=True, config={"displayModeBar": False})
 
     col5, col6 = st.columns(2)
     with col5:
         st.markdown("#### 💼 开放求职状态")
         hire_counts = df["hireable"].map(
-            lambda x: "开放求职 ✅" if x == 1 else "未开放 / 未知"
+            lambda x: "开放求职 ✅" if pd.to_numeric(x, errors="coerce") == 1 else "未开放 / 未知"
         ).value_counts().reset_index()
         hire_counts.columns = ["状态", "人数"]
         fig_hire = px.pie(
@@ -282,7 +329,7 @@ with tab2:
             color_discrete_sequence=["#2ecc71", "#bdc3c7"], height=300,
         )
         fig_hire.update_layout(margin=dict(t=10))
-        st.plotly_chart(fig_hire, use_container_width=True)
+        st.plotly_chart(fig_hire, use_container_width=True, config={"displayModeBar": False})
 
     with col6:
         st.markdown("#### 📈 Top 20 新增 vs 删除行")
@@ -295,7 +342,7 @@ with tab2:
             barmode="group", xaxis_tickangle=-40, height=300,
             margin=dict(t=10), legend=dict(orientation="h", y=1.1),
         )
-        st.plotly_chart(fig_stacked, use_container_width=True)
+        st.plotly_chart(fig_stacked, use_container_width=True, config={"displayModeBar": False})
 
 
 # ──────────────────────────────────────────────────────────
@@ -304,7 +351,7 @@ with tab2:
 with tab3:
     st.subheader(f"完整数据表  ·  共 {len(df)} 位贡献者")
 
-    # 筛选控件
+    # 筛选控件：一行三列
     fc1, fc2, fc3 = st.columns(3)
     with fc1:
         kw = st.text_input("🔍 搜索", placeholder="用户名 / 姓名 / 公司...", key="search_table")
@@ -323,6 +370,10 @@ with tab3:
         tdf = tdf[mask]
     tdf = tdf.sort_values(sort_by).head(top_n).reset_index(drop=True)
 
+    # 确保 hireable 列为数值，使 CheckboxColumn 能正确渲染
+    if "hireable" in tdf.columns:
+        tdf["hireable"] = pd.to_numeric(tdf["hireable"], errors="coerce").fillna(0).astype(bool)
+
     display_cols = [
         "rank", "login", "name", "company", "location",
         "total_commits", "total_additions", "total_deletions",
@@ -332,6 +383,7 @@ with tab3:
     ]
     display_cols = [c for c in display_cols if c in tdf.columns]
 
+    st.caption("💡 点击列标题可排序，拖拽可调整列宽")
     st.dataframe(
         tdf[display_cols],
         use_container_width=True,
@@ -371,11 +423,11 @@ with tab4:
 
     with ec1:
         st.markdown("#### 📄 完整 CSV（全部字段）")
-        st.caption(f"包含所有 {len(CSV_FIELDS)} 个字段，含 email、主页、bio、avatar 等")
         all_cols = [c for c in CSV_FIELDS if c in df.columns]
+        st.caption(f"包含所有 {len(all_cols)} 个字段，含 email、主页、bio、avatar 等")
         csv_full = df[all_cols].to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
         st.download_button(
-            label=f"⬇️ 下载完整 CSV  （{len(df)} 条）",
+            label=f"⬇️ 下载完整 CSV  （{len(df)} 条 × {len(all_cols)} 字段）",
             data=csv_full,
             file_name=f"contributors_{selected_name.replace('/', '_')}_full.csv",
             mime="text/csv",
@@ -385,7 +437,6 @@ with tab4:
 
     with ec2:
         st.markdown("#### 📊 精简 CSV（核心贡献字段）")
-        st.caption("仅包含排名、用户名、commits、代码行数等核心数据，适合快速分析")
         slim_cols = [
             "rank", "login", "name", "company", "location",
             "total_commits", "total_additions", "total_deletions",
@@ -393,9 +444,10 @@ with tab4:
             "followers", "public_repos", "contributions_on_default_branch",
         ]
         slim_cols = [c for c in slim_cols if c in df.columns]
+        st.caption(f"包含 {len(slim_cols)} 个核心字段，排名、commits、代码行数等，适合快速分析")
         csv_slim = df[slim_cols].to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
         st.download_button(
-            label=f"⬇️ 下载精简 CSV  （{len(df)} 条）",
+            label=f"⬇️ 下载精简 CSV  （{len(df)} 条 × {len(slim_cols)} 字段）",
             data=csv_slim,
             file_name=f"contributors_{selected_name.replace('/', '_')}_slim.csv",
             mime="text/csv",
@@ -403,7 +455,7 @@ with tab4:
         )
 
     st.markdown("---")
-    st.markdown("#### 🗂️ 数据库中的所有仓库")
+    st.markdown(f"#### 🗂️ 数据库中的所有仓库（共 {len(repos)} 个）")
     repos_df = pd.DataFrame(repos)[["full_name", "stars", "forks", "language", "scraped_at"]]
     repos_df.columns = ["仓库", "Stars", "Forks", "主要语言", "采集时间"]
     st.dataframe(repos_df, use_container_width=True, hide_index=True)

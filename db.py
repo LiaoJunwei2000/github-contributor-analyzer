@@ -6,7 +6,7 @@ DB_PATH = os.path.join(os.path.dirname(__file__), "contributors.db")
 
 
 def get_conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=10)
     conn.row_factory = sqlite3.Row
     return conn
 

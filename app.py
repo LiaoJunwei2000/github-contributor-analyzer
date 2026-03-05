@@ -34,10 +34,27 @@ with st.sidebar:
     )
     st.caption("需要 `public_repo` 权限。[创建 Token ↗](https://github.com/settings/tokens/new)")
 
-    st.markdown("---")
+# ============ Main ============
+st.title("🐙 GitHub 仓库贡献者分析")
+st.caption("基于 GitHub REST API，统计仓库贡献者的 commit 数、代码行数变更及个人主页信息。支持导出完整 CSV。")
 
-    with st.expander("⚠️ 为什么人数比 GitHub 主页少？", expanded=True):
-        st.markdown("""
+st.markdown("---")
+
+col_input, col_btn, col_check = st.columns([6, 2, 2])
+with col_input:
+    repo_input = st.text_input(
+        "仓库地址",
+        placeholder="owner/repo，例如：facebook/react",
+    )
+with col_btn:
+    st.markdown("<br>", unsafe_allow_html=True)
+    run_btn = st.button("🚀 开始分析", type="primary", use_container_width=True)
+with col_check:
+    st.markdown("<br>", unsafe_allow_html=True)
+    include_anon = st.checkbox("包含匿名贡献者", value=False)
+
+with st.expander("⚠️ 为什么人数比 GitHub 主页少？"):
+    st.markdown("""
 GitHub 网页上显示的贡献者数量 **≠ API 返回数量**，原因如下：
 
 **GitHub 网页统计的是：**
@@ -53,12 +70,10 @@ GitHub 网页上显示的贡献者数量 **≠ API 返回数量**，原因如下
 因此 API 返回人数会**显著少于**网页显示人数。
 
 这是 GitHub API 的已知限制，并非工具问题。
-        """)
+    """)
 
-    st.markdown("---")
-
-    with st.expander("📋 全部可获取字段说明", expanded=False):
-        st.markdown("""
+with st.expander("📋 全部可获取字段说明"):
+    st.markdown("""
 **表格中展示（核心贡献数据）**
 
 | 字段 | 说明 |
@@ -97,23 +112,7 @@ GitHub 网页上显示的贡献者数量 **≠ API 返回数量**，原因如下
 | `addition_deletion_ratio` | 增删比（新增 / 删除） |
 
 > 💡 点击下方「下载完整 CSV」可获取所有 {total} 个字段的完整数据。
-        """.format(total=len(CSV_FIELDS)))
-
-# ============ Main ============
-st.header("GitHub 仓库贡献者分析")
-st.caption("基于 GitHub REST API，统计仓库贡献者的 commit 数、代码行数变更及个人主页信息。")
-
-repo_input = st.text_input(
-    "仓库地址",
-    placeholder="owner/repo，例如：facebook/react",
-    label_visibility="collapsed",
-)
-
-col1, col2 = st.columns([1, 5])
-with col1:
-    run_btn = st.button("开始分析", type="primary", use_container_width=True)
-with col2:
-    include_anon = st.checkbox("包含匿名贡献者", value=False)
+    """.format(total=len(CSV_FIELDS)))
 
 # ============ 执行分析 ============
 if run_btn:
@@ -150,7 +149,7 @@ if run_btn:
             status.update(label="分析失败", state="error")
             st.error("未能获取贡献者数据。")
             st.stop()
-        st.write(f"✅ 获取到 **{len(all_contribs)}** 位贡献者（基于 git commit 历史，见左侧说明）")
+        st.write(f"✅ 获取到 **{len(all_contribs)}** 位贡献者（基于 git commit 历史）")
 
         # Step 3: 统计数据
         st.write("📊 获取代码增删统计（首次可能需要等待 GitHub 计算）...")
@@ -180,7 +179,7 @@ if run_btn:
     st.info(
         f"共获取到 **{len(enriched)}** 位贡献者。"
         "表格仅展示核心字段，**email、个人主页、Twitter、bio 等完整信息请下载 CSV**。"
-        "左侧「全部可获取字段说明」中查看所有字段详情。",
+        "展开上方「全部可获取字段说明」查看所有字段详情。",
         icon="💡",
     )
 
@@ -203,6 +202,7 @@ if run_btn:
     if "avg_changes_per_commit" in df_display.columns:
         df_display["avg_changes_per_commit"] = pd.to_numeric(df_display["avg_changes_per_commit"], errors="coerce").round(1)
 
+    st.caption("点击列标题可对表格进行排序")
     st.dataframe(
         df_display,
         use_container_width=True,
@@ -238,12 +238,4 @@ if run_btn:
         mime="text/csv",
         type="primary",
     )
-    st.success("✅ 数据已保存到本地数据库，前往「📊 看板」页面查看分析图表。")
-
-    st.caption(
-        f"CSV 包含 {len(CSV_FIELDS)} 个字段：rank、login、name、company、location、**email**、"
-        "**blog**、**twitter_username**、hireable、public_repos、public_gists、followers、following、"
-        "total_commits、total_additions、total_deletions、net_lines、total_changes、"
-        "avg_changes_per_commit、addition_deletion_ratio、contributions_on_default_branch、"
-        "**profile_url**、**avatar_url**、account_created、last_updated"
-    )
+    st.success("✅ 数据已保存，前往「📂 历史数据」页面查看分析图表。")

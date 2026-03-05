@@ -57,7 +57,6 @@ def _make_request(url: str, token: str, timeout: int = REQUEST_TIMEOUT) -> Optio
 
             # 其他错误则触发重试
             resp.raise_for_status()
-            return resp
         except requests.exceptions.RequestException as e:
             if attempt < MAX_RETRIES - 1:
                 time.sleep(2 ** attempt)
@@ -102,6 +101,7 @@ def fetch_all_contributors(repo: str, token: str, include_anon: bool) -> List[Di
     url = base
     all_rows: List[Dict[str, Any]] = []
 
+    # tqdm 在 Streamlit 环境中输出到 stderr，不影响功能但会产生日志噪音
     with tqdm(desc="分页抓取 contributors", unit="页", leave=True) as bar:
         while url:
             resp = _make_request(url, token)
@@ -200,9 +200,7 @@ def merge_contrib_and_stats(all_contribs: List[Dict[str, Any]], stats: Optional[
 
         rows.append(base)
 
-    def _sort_key(x):
-        return (x.get("total_changes") or -1, x.get("total_commits") or 0)
-    rows.sort(key=_sort_key, reverse=True)
+    rows.sort(key=lambda x: (x.get("total_changes") or 0, x.get("total_commits") or 0), reverse=True)
 
     for i, r in enumerate(rows, 1):
         r["rank"] = i
