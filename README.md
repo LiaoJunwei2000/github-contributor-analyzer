@@ -16,7 +16,7 @@
 - [页面说明](#页面说明)
 - [字段说明](#字段说明)
 - [已知限制](#已知限制)
-- [Agent Teams 开发方案](#agent-teams-开发方案)
+- [云端部署](#云端部署streamlit-cloud--supabase)
 - [Git 管理策略](#git-管理策略)
 
 ---
@@ -28,20 +28,36 @@
 | 贡献者采集 | 分页获取仓库所有贡献者，基于 git commit 历史 |
 | 代码统计 | 每位贡献者的 additions / deletions / net lines |
 | 用户画像 | 公司、地区、邮箱、Followers、求职状态等 25 个字段 |
-| 本地存储 | SQLite 数据库，支持多仓库历史对比 |
+| 后台任务 | 爬取在后台线程运行，切换页面不中断，进度实时显示 |
+| 限速管理 | 自动检测 Rate Limit，降速/暂停/自动恢复，进度条三态显示 |
+| API 余量 | 侧边栏实时显示剩余请求配额与重置时间 |
+| 续传模式 | 跳过已抓取用户，仅补全缺失 Profile，适合中途断线重跑 |
+| 数据存储 | 本地 SQLite / 云端 PostgreSQL 自动切换 |
 | 可视化看板 | 公司分布、地区热图、Commits 趋势、散点图等 6 种图表 |
-| 数据导出 | 完整 CSV（25 字段）和精简 CSV，UTF-8 BOM 编码 |
+| 数据导出 | 完整 CSV（25 字段），UTF-8 BOM 编码 |
 | 使用手册 | 内置教程页面，含 Token 配置步骤和 FAQ |
 
 ---
 
-## 快速开始
+## 分支说明
 
-### 1. 克隆项目
+| 分支 | 环境 | 数据库 |
+|------|------|--------|
+| `dev` | 本地开发 | SQLite（自动创建 `contributors.db`） |
+| `main` | Streamlit Cloud 生产环境 | Supabase PostgreSQL |
+
+数据库自动切换：有 `DATABASE_URL` 用 PostgreSQL，否则用 SQLite，无需手动配置。
+
+---
+
+## 快速开始（本地开发）
+
+### 1. 克隆并切换到 dev 分支
 
 ```bash
 git clone https://github.com/LiaoJunwei2000/github-contributor-analyzer.git
 cd github-contributor-analyzer
+git checkout dev
 ```
 
 ### 2. 安装依赖
@@ -54,15 +70,17 @@ pip install -r requirements.txt
 
 ### 3. 配置 GitHub Token
 
-在项目根目录创建 `.env` 文件：
+```bash
+cp .streamlit/secrets.toml.example .streamlit/secrets.toml
+```
 
-```env
-GITHUB_TOKEN=ghp_your_token_here
+编辑 `.streamlit/secrets.toml`，只需填入 GitHub Token（本地不需要 `DATABASE_URL`）：
+
+```toml
+GITHUB_TOKEN = "ghp_your_token_here"
 ```
 
 > Token 需要 `public_repo` 权限。[点击创建 →](https://github.com/settings/tokens/new)
->
-> 未配置 Token 时 API 限制为 60 次/小时，分析大型仓库请务必配置。
 
 ### 4. 启动应用
 
@@ -70,7 +88,7 @@ GITHUB_TOKEN=ghp_your_token_here
 streamlit run app.py
 ```
 
-浏览器访问 `http://localhost:8501`
+浏览器访问 `http://localhost:8501`，数据自动存入本地 `contributors.db`。
 
 ---
 
@@ -79,21 +97,24 @@ streamlit run app.py
 ```
 github-contributor-analyzer/
 ├── app.py                      # Streamlit 入口，注册页面导航
-├── main.py                     # 核心爬取逻辑（API 请求、数据处理）
-├── db.py                       # SQLite 数据库模块
+├── main.py                     # 核心爬取逻辑（API 请求、限速管理、数据处理）
+├── db.py                       # 数据库模块（SQLite / PostgreSQL 自动切换）
+├── background_jobs.py          # 后台任务状态管理（进程级内存）
 ├── requirements.txt            # Python 依赖
-├── .env.example                # Token 配置示例
 ├── .gitignore
 ├── README.md
+├── .streamlit/
+│   ├── secrets.toml.example    # 配置模板
+│   └── secrets.toml            # 本地配置（gitignore）
 └── pages/
     ├── scraper.py              # 数据采集页面
     ├── 1_📂_历史数据.py         # 历史数据看板页面
     └── manual.py               # 使用手册页面
 ```
 
-**数据文件（本地，不入 Git）：**
-- `contributors.db` — SQLite 数据库，存储所有爬取结果
-- `.env` — GitHub Token 配置
+**本地数据文件（不入 Git）：**
+- `contributors.db` — SQLite 数据库
+- `.streamlit/secrets.toml` — Token 配置
 
 ---
 
@@ -104,56 +125,69 @@ github-contributor-analyzer/
 | 类别 | 选型 | 说明 |
 |------|------|------|
 | 语言 | Python 3.11+ | |
-| HTTP 客户端 | `requests` | 同步请求，含重试与限流处理 |
-| 并发 | `ThreadPoolExecutor` | 并发获取用户 Profile，默认 8 线程 |
-| GUI 框架 | `Streamlit` | 本地 Web 应用，多页面导航 |
-| 数据库 | `SQLite` (内置) | 本地持久化，无需额外安装 |
+| HTTP 客户端 | `requests` | 同步请求，含重试与限速处理 |
+| 并发 | `ThreadPoolExecutor(max_workers=4)` | 并发抓取用户 Profile |
+| 后台任务 | `threading.Thread(daemon=False)` | 切换页面/关闭浏览器不中断 |
+| GUI 框架 | `Streamlit` | 多页面 Web 应用 |
+| 数据库（本地） | `SQLite` | 无需额外安装 |
+| 数据库（云端） | `PostgreSQL` via `psycopg2` | Supabase 托管 |
 | 数据处理 | `pandas` | DataFrame 操作与 CSV 导出 |
 | 可视化 | `plotly` | 交互式图表 |
-| 配置管理 | `python-dotenv` | `.env` 文件自动加载 |
-| 进度条 | `tqdm` | 爬取进度显示 |
+| 配置管理 | `python-dotenv` + `st.secrets` | 本地 `.env` / 云端 secrets |
+| 进度条 | `tqdm` | CLI 进度显示 |
 
 ### 系统架构
 
 ```
-Streamlit Web UI (localhost:8501)
+Browser (Streamlit Web UI)
         │
-        ├── pages/scraper.py          # 数据采集入口
+        ├── pages/scraper.py              # 采集页面（UI 线程）
         │       │
-        │       ▼
-        │   main.py (核心模块)
-        │       ├── fetch_repo_details()           → GET /repos/{owner}/{repo}
-        │       ├── fetch_all_contributors()        → GET /repos/{owner}/{repo}/contributors（分页）
-        │       ├── poll_contributor_stats()        → GET /repos/{owner}/{repo}/stats/contributors（轮询）
-        │       ├── merge_contrib_and_stats()       → 本地合并计算
-        │       └── enrich_with_user_details()      → GET /users/{login}（并发 8 线程）
-        │               │
-        │               ▼
-        │           db.py (SQLite)
-        │               ├── save_repo()
-        │               └── save_contributors()
+        │       ├── [点击开始分析]
+        │       │       │
+        │       │       ▼
+        │       │   background_jobs.py    # 任务状态字典（进程级内存）
+        │       │       │
+        │       │       ▼
+        │       │   threading.Thread ──► _run_job()   # 独立后台线程
+        │       │                               │
+        │       │                               ▼
+        │       │                           main.py (核心模块)
+        │       │                               ├── RateLimiter        # 线程安全限速管理
+        │       │                               ├── fetch_repo_details()
+        │       │                               ├── fetch_all_contributors()
+        │       │                               ├── poll_contributor_stats()
+        │       │                               ├── merge_contrib_and_stats()
+        │       │                               └── enrich_with_user_details()
+        │       │                                       │
+        │       │                                       ▼
+        │       │                                   db.py (数据库)
+        │       │                                       ├── save_repo()
+        │       │                                       └── save_contributors()
+        │       │
+        │       └── [轮询] st.rerun() 每 1.5s 读取 background_jobs 状态更新 UI
         │
-        └── pages/1_📂_历史数据.py    # 看板与分析
+        └── pages/1_📂_历史数据.py         # 看板页面
                 │
                 ▼
-            db.py (SQLite)
-                ├── list_repos()
-                ├── get_contributors()
-                └── delete_repo()
+            db.py → list_repos() / get_contributors() / delete_repo()
 ```
 
-### Rate Limit 处理
+### Rate Limit 管理（RateLimiter 类）
 
-- 响应头 `X-RateLimit-Reset` 监控重置时间
-- 遇到 403 rate limit 时自动等待至重置时间
-- 遇到其他网络错误时指数退避重试（最多 3 次）
-- 404 直接返回 `None`（bot 账号正常情况）
+- 每个爬取任务共享一个 `RateLimiter` 实例，跨所有并发线程
+- 从响应头 `X-RateLimit-Remaining` / `X-RateLimit-Reset` 实时更新状态
+- **三种状态：**
+  - `normal`（余量 ≥ 200）：正常速度
+  - `slow`（余量 < 200）：请求间自动加 1s 延迟
+  - `paused`（余量 = 0 或收到 403）：使用 `threading.Event` 阻塞所有线程，等待重置后自动恢复
+- Rate limit 等待不消耗 retry 次数（while 循环分离两类错误）
 
 ### 数据库 Schema
 
 ```sql
 CREATE TABLE repos (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    id          INTEGER PRIMARY KEY,
     full_name   TEXT UNIQUE NOT NULL,
     description TEXT,
     stars       INTEGER,
@@ -164,7 +198,7 @@ CREATE TABLE repos (
 );
 
 CREATE TABLE contributors (
-    id                              INTEGER PRIMARY KEY AUTOINCREMENT,
+    id                              INTEGER PRIMARY KEY,
     repo_full_name                  TEXT NOT NULL,
     rank                            INTEGER,
     login                           TEXT NOT NULL,
@@ -180,13 +214,14 @@ CREATE TABLE contributors (
 
 ### 🔍 数据采集
 
-1. 侧边栏填入 GitHub Token
+1. 侧边栏填入 GitHub Token（自动显示当前 API 余量）
 2. 输入仓库地址（格式：`owner/repo`，例如 `facebook/react`）
-3. 点击「🚀 开始分析」
-4. 等待 5 个步骤依次完成：获取仓库信息 → 抓取贡献者列表 → 获取增删统计 → 合并数据 → 抓取用户 Profile → 保存数据库
-5. 预览结果表格，下载完整 CSV
+3. 可选：勾选「包含匿名贡献者」或「⚡ 续传」
+4. 点击「🚀 开始分析」，任务在后台线程运行，可自由切换页面
+5. 返回页面后自动恢复进度显示，完成后展示结果表格并下载 CSV
 
-> 大型仓库（500+ 贡献者）完整抓取约需 3-10 分钟。
+> **大型仓库**（500+ 贡献者）完整抓取约需 3-10 分钟。
+> **续传模式**：若中途触发 Rate Limit，勾选「⚡ 续传」重新分析，自动跳过已完成用户。
 
 ### 📂 历史数据
 
@@ -199,12 +234,7 @@ CREATE TABLE contributors (
 
 ### 📖 使用手册
 
-内置教程，包含：
-- Token 获取步骤说明
-- 操作流程图解
-- 抓取步骤耗时参考
-- 字段说明表格
-- 6 条 FAQ（贡献者数量差异、增删为 0、Rate Limit、数据备份等）
+内置教程，包含：Token 获取步骤、操作流程图解、抓取耗时参考、字段说明、FAQ。
 
 ---
 
@@ -250,93 +280,17 @@ CREATE TABLE contributors (
 
 ### API 贡献者数量 < GitHub 网页显示数量
 
-GitHub 网页统计的是**所有提交过 PR 且被 merge 的用户**，而 API 只统计 git commit 历史中有直接记录的用户。
-
-大量项目（如 vllm、PyTorch、Transformers）使用 **Squash Merge**，合并后 commit 作者变为维护者，原 PR 作者不被 API 计入。这是 GitHub API 的已知限制。
+GitHub 网页统计所有提交过 PR 且被 merge 的用户，而 API 只统计 git commit 历史中有直接记录的用户。大量项目（如 vllm、PyTorch）使用 **Squash Merge**，合并后 commit 作者变为维护者，原 PR 作者不被 API 计入。
 
 ### 超大型仓库 additions/deletions 为 0
 
-GitHub 的 `/stats/contributors` 端点对 commit 数量极多的仓库可能返回全零，属于官方文档注明的已知限制。此时 `total_commits`（来自 `/contributors` 端点）仍然准确。
+GitHub 的 `/stats/contributors` 端点对 commit 数量极多的仓库可能返回全零，属于官方文档注明的已知限制。此时 `total_commits` 仍然准确。
 
----
+### 后台任务在云端的限制
 
-## Agent Teams 开发方案
-
-本项目使用 Claude Agent Teams 进行协作开发，以下是完整方案。
-
-### Agent 角色定义
-
-| Agent | 职责 | 负责文件 |
-|-------|------|---------|
-| **team-lead** | 任务分配、进度跟踪、最终集成 | — |
-| **tech-architect** | 架构设计、数据模型、接口规范 | `main.py`、`db.py`、`README.md` |
-| **app-ui-agent** | Streamlit 采集页面 UI | `app.py`、`pages/scraper.py` |
-| **history-ui-agent** | 历史数据看板 UI | `pages/1_📂_历史数据.py` |
-| **code-review-agent** | 代码审查、Bug 修复 | 只读审查 |
-
-### 开发阶段流程
-
-```
-Phase 1：规划（串行）
-  [tech-architect] 架构设计 + 数据模型 + 接口规范 → README.md
-
-Phase 2：并行开发
-  ┌──────────────────┬───────────────────────┐
-  │  app-ui-agent    │  history-ui-agent     │
-  │  scraper.py      │  1_📂_历史数据.py     │
-  └────────┬─────────┴──────────┬────────────┘
-           └──────────┬─────────┘
-
-Phase 3：审查与修复（并行）
-  [code-review-agent] Bug 修复 + UI 优化
-
-Phase 4：文档
-  [tech-architect] 完善 README.md
-```
-
-### Agent 协作规范
-
-**文件所有权（避免冲突）：**
-
-| Agent | 负责文件 |
-|-------|---------|
-| tech-architect | `main.py`、`db.py`、`README.md` |
-| app-ui-agent | `app.py`、`pages/scraper.py` |
-| history-ui-agent | `pages/1_📂_历史数据.py` |
-| code-review-agent | 只读审查，不直接修改源码 |
-
-**Agent 类型要求：** 使用 `general-purpose` 类型 + 显式指定 `model: "sonnet"`（`Plan` 类型缺少 `SendMessage` 工具，无法与 team-lead 通信）。
-
----
-
-## Git 管理策略
-
-### 分支策略
-
-```
-main（受保护，只接受 PR 合并）
-  │
-  ├── feature/add-csv-export ──────────► PR → main
-  ├── fix/pagination-bug ──────────────► PR → main
-  └── hotfix/auth-token-crash ─────────► PR → main → [Tag v1.x.y]
-```
-
-| 分支类型 | 命名规范 | 合并方式 |
-|---------|---------|---------|
-| `main` | — | — |
-| `feature/*` | `feature/short-desc` | Squash Merge |
-| `fix/*` | `fix/issue-desc` | Squash Merge |
-| `hotfix/*` | `hotfix/critical-desc` | Squash Merge |
-
-### 提交规范（Conventional Commits）
-
-| 类型 | 说明 |
-|------|------|
-| `feat` | 新功能 |
-| `fix` | Bug 修复 |
-| `docs` | 文档更新 |
-| `refactor` | 代码重构 |
-| `chore` | 构建/依赖等杂项 |
+Streamlit Cloud 空闲超时（约 5 分钟无用户访问）会 sleep 整个应用进程，**所有后台线程都会被终止**。已完成并写入数据库的数据不受影响，但进行中的任务会中断。建议：
+- 保持浏览器页面开着，或
+- 对于超大型仓库分批分析 + 续传模式
 
 ---
 
@@ -347,33 +301,65 @@ main（受保护，只接受 PR 合并）
 ### 第一步：创建 Supabase 数据库
 
 1. 注册 [supabase.com](https://supabase.com)，创建新项目
-2. 进入 **Project Settings → Database → Connection string → URI**，复制连接字符串（格式如下）：
+2. 进入项目后点击顶部 **Connect 按钮**
+3. 选择 **Session Mode Pooler**（支持 IPv4，兼容 Streamlit Cloud），复制 URI：
    ```
-   postgresql://postgres:[YOUR-PASSWORD]@db.[YOUR-PROJECT-REF].supabase.co:5432/postgres
+   postgresql://postgres.[project-ref]:[password]@aws-0-[region].pooler.supabase.com:5432/postgres
    ```
-3. 无需手动建表，应用启动时 `init_db()` 会自动创建
+   > ⚠️ **不要用 Direct Connection**（仅支持 IPv6，Streamlit Cloud 不兼容）
+
+4. 无需手动建表，应用启动时 `init_db()` 会自动创建
 
 ### 第二步：部署到 Streamlit Community Cloud
 
-1. 将代码推送到 GitHub（确保 `secrets.toml` 在 `.gitignore` 中）
+1. 将 `main` 分支推送到 GitHub（确保 `secrets.toml` 在 `.gitignore` 中）
 2. 登录 [share.streamlit.io](https://share.streamlit.io)，点击 **New app**
-3. 选择你的 GitHub 仓库，入口文件填 `app.py`
-4. 点击 **Advanced settings → Secrets**，填入以下内容：
+3. 选择仓库，Branch 选 **main**，入口文件填 `app.py`
+4. 点击 **Advanced settings → Secrets**，填入：
    ```toml
-   DATABASE_URL = "postgresql://postgres:密码@db.你的项目ID.supabase.co:5432/postgres"
+   DATABASE_URL = "postgresql://postgres.你的项目ID:密码@aws-0-区域.pooler.supabase.com:5432/postgres"
    GITHUB_TOKEN = "ghp_你的token"
    ```
 5. 点击 **Deploy** 即可
 
-### 本地开发配置
+### 日常开发流程
 
 ```bash
-cp .streamlit/secrets.toml.example .streamlit/secrets.toml
-# 编辑 .streamlit/secrets.toml，填入 Supabase 连接字符串和 GitHub Token
-streamlit run app.py
+# 在 dev 分支开发和测试
+git checkout dev
+# ... 修改代码 ...
+git add . && git commit -m "feat: xxx"
+git push
+
+# 测试通过后合并到 main 触发云端更新
+git checkout main
+git merge dev
+git push
+git checkout dev
 ```
 
 > `.streamlit/secrets.toml` 已在 `.gitignore` 中，不会上传到 GitHub。
+
+---
+
+## Git 管理策略
+
+| 分支类型 | 命名规范 | 合并方式 |
+|---------|---------|---------|
+| `main` | 生产环境，受保护 | — |
+| `dev` | 本地开发主分支 | Merge to main |
+| `feature/*` | `feature/short-desc` | Squash Merge |
+| `fix/*` | `fix/issue-desc` | Squash Merge |
+
+### 提交规范（Conventional Commits）
+
+| 类型 | 说明 |
+|------|------|
+| `feat` | 新功能 |
+| `fix` | Bug 修复 |
+| `docs` | 文档更新 |
+| `refactor` | 代码重构 |
+| `chore` | 构建/依赖等杂项 |
 
 ---
 

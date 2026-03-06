@@ -2,17 +2,92 @@ import os
 import csv
 import time
 import sys
-from typing import List, Dict, Any, Optional
+import threading
+from typing import List, Dict, Any, Optional, Callable
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 
 # ============ 配置 ============
-# 优先从环境变量读取 GITHUB_TOKEN，若未设置，可在此处填写
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
 MAX_RETRIES = 3
 REQUEST_TIMEOUT = 30
-USER_DETAILS_CONCURRENCY = 8
+USER_DETAILS_CONCURRENCY = 4   # 降低并发，减少触发 secondary rate limit
+
+
+# ============ 限速管理器 ============
+class RateLimiter:
+    """
+    线程安全的限速管理器。
+    - remaining < 200  → 降速模式（请求间加延迟）
+    - remaining == 0   → 暂停所有线程，等待 reset 后自动恢复
+    - rate limit 等待不消耗 retry 次数
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._sleep_lock = threading.Lock()   # 保证只有一个线程执行 sleep
+        self._resume = threading.Event()
+        self._resume.set()                    # 初始未暂停
+        self.remaining: int = 5000
+        self.reset_at: float = 0.0
+        self.status: str = "normal"           # "normal" | "slow" | "paused"
+
+    def record(self, resp: Optional[requests.Response]):
+        """从响应头读取限速状态并更新。"""
+        if resp is None:
+            return
+        try:
+            remaining = int(resp.headers.get("X-RateLimit-Remaining", -1))
+            reset_at = float(resp.headers.get("X-RateLimit-Reset", 0))
+        except (ValueError, TypeError):
+            return
+        if remaining < 0:
+            return
+        with self._lock:
+            self.remaining = remaining
+            self.reset_at = reset_at
+            if remaining == 0:
+                self.status = "paused"
+                self._resume.clear()
+            elif remaining < 200:
+                self.status = "slow"
+                self._resume.set()
+            else:
+                self.status = "normal"
+                self._resume.set()
+
+    def pause(self, reset_ts: float):
+        """从 403 响应中显式触发暂停。"""
+        with self._lock:
+            self.remaining = 0
+            self.reset_at = reset_ts
+            self.status = "paused"
+            self._resume.clear()
+
+    def wait_if_needed(self):
+        """若处于暂停状态，阻塞当前线程直到限速重置。只有一个线程负责 sleep，其余等待 Event。"""
+        if self._resume.is_set():
+            return
+        with self._sleep_lock:
+            if self._resume.is_set():   # double-check
+                return
+            wait_s = max(5, int(self.reset_at - time.time()) + 2)
+            _log(f"[WARN] Rate limit: pausing all threads for {wait_s}s, then auto-resume...")
+            time.sleep(wait_s)
+            with self._lock:
+                self.remaining = 5000
+                self.status = "normal"
+                self._resume.set()
+        self._resume.wait()             # 其余线程在此等待
+
+    @property
+    def request_delay(self) -> float:
+        """降速模式下每次请求额外等待的秒数。"""
+        return 1.0 if self.status == "slow" else 0.0
+
+    def wait_remaining_seconds(self) -> int:
+        return max(0, int(self.reset_at - time.time()) + 1)
 
 CSV_FIELDS = [
     "rank",
@@ -29,37 +104,58 @@ def _log(msg: str, file=sys.stdout):
     """统一的日志输出函数。"""
     print(msg, file=file)
 
-def _make_request(url: str, token: str, timeout: int = REQUEST_TIMEOUT) -> Optional[requests.Response]:
-    """发起健壮的 API 请求，处理重试、速率限制和特定错误码。"""
+def _make_request(
+    url: str,
+    token: str,
+    timeout: int = REQUEST_TIMEOUT,
+    rate_limiter: Optional[RateLimiter] = None,
+) -> Optional[requests.Response]:
+    """
+    发起健壮的 API 请求。
+    - Rate limit 等待不消耗 retry 次数（while 循环分离两类错误）
+    - 若传入 rate_limiter，请求前先等待限速恢复，响应后更新状态
+    """
     headers = {
         "Authorization": f"token {token}",
         "Accept": "application/vnd.github.v3+json",
         "User-Agent": "GitHubContribExport/full-1.0",
     }
-    for attempt in range(MAX_RETRIES):
+    error_count = 0
+    while error_count < MAX_RETRIES:
+        # 若全局限速暂停，阻塞等待恢复
+        if rate_limiter:
+            rate_limiter.wait_if_needed()
+            if rate_limiter.request_delay:
+                time.sleep(rate_limiter.request_delay)
         try:
             resp = requests.get(url, headers=headers, timeout=timeout)
 
-            # 速率限制：尊重 reset
-            if resp.status_code == 403 and "rate limit" in (resp.text or "").lower():
-                reset_ts = int(resp.headers.get("X-RateLimit-Reset", time.time() + 60))
-                wait_s = max(5, int(reset_ts - time.time()) + 2)
-                _log(f"[WARN] Rate limit hit. Waiting for {wait_s} seconds...")
-                time.sleep(wait_s)
-                continue
+            if rate_limiter:
+                rate_limiter.record(resp)
 
-            # 对于用户详情查询，404 是正常情况（例如 bot），直接返回 None 以免重试
+            # Rate limit 403：触发暂停并重试，不计入 error_count
+            if resp.status_code == 403 and "rate limit" in (resp.text or "").lower():
+                reset_ts = float(resp.headers.get("X-RateLimit-Reset", time.time() + 60))
+                if rate_limiter:
+                    rate_limiter.pause(reset_ts)
+                else:
+                    wait_s = max(5, int(reset_ts - time.time()) + 2)
+                    _log(f"[WARN] Rate limit hit. Waiting {wait_s}s...")
+                    time.sleep(wait_s)
+                continue  # 不增加 error_count
+
             if resp.status_code == 404:
                 return None
 
             if resp.status_code in (200, 202):
                 return resp
 
-            # 其他错误则触发重试
             resp.raise_for_status()
+
         except requests.exceptions.RequestException as e:
-            if attempt < MAX_RETRIES - 1:
-                time.sleep(2 ** attempt)
+            error_count += 1
+            if error_count < MAX_RETRIES:
+                time.sleep(2 ** (error_count - 1))
             else:
                 _log(f"[ERROR] Request failed for {url}: {e}", file=sys.stderr)
                 return None
@@ -138,10 +234,14 @@ def poll_contributor_stats(repo: str, token: str, attempts: int = 7, backoff_bas
     return None
 
 # ============ 用户详情 ============
-def fetch_user_detail(username: str, token: str) -> Optional[Dict[str, Any]]:
+def fetch_user_detail(
+    username: str,
+    token: str,
+    rate_limiter: Optional[RateLimiter] = None,
+) -> Optional[Dict[str, Any]]:
     """获取单个用户的详细 profile 信息。"""
     url = f"https://api.github.com/users/{username}"
-    resp = _make_request(url, token)
+    resp = _make_request(url, token, rate_limiter=rate_limiter)
     if resp and resp.status_code == 200:
         return resp.json()
     return None
@@ -207,15 +307,31 @@ def merge_contrib_and_stats(all_contribs: List[Dict[str, Any]], stats: Optional[
 
     return rows
 
-def enrich_with_user_details(rows: List[Dict[str, Any]], token: str) -> List[Dict[str, Any]]:
-    """并发补全用户 profile 字段。"""
+def enrich_with_user_details(
+    rows: List[Dict[str, Any]],
+    token: str,
+    skip_logins: set = None,
+    progress_cb: Callable = None,
+) -> List[Dict[str, Any]]:
+    """并发补全用户 profile 字段。
+    skip_logins 中的用户跳过 API 请求（续传用）。
+    progress_cb(done, total, rate_limiter) 每完成一个用户后调用（可选，用于 UI 进度显示）。
+    """
+    skip = set(skip_logins or [])
     out = [dict(r) for r in rows]
-    login_to_row_map = {r['login']: r for r in out if r.get('login')}
+    login_to_row_map = {r['login']: r for r in out if r.get('login') and r['login'] not in skip}
+
+    rate_limiter = RateLimiter()
+    total = len(login_to_row_map)
+    done = 0
 
     with ThreadPoolExecutor(max_workers=USER_DETAILS_CONCURRENCY) as ex:
-        futures = {ex.submit(fetch_user_detail, login, token): login for login in login_to_row_map.keys()}
+        futures = {
+            ex.submit(fetch_user_detail, login, token, rate_limiter): login
+            for login in login_to_row_map.keys()
+        }
 
-        for fut in tqdm(as_completed(futures), total=len(futures), desc="抓取用户详细信息", unit="人", leave=True):
+        for fut in tqdm(as_completed(futures), total=total, desc="抓取用户详细信息", unit="人", leave=True):
             login = futures[fut]
             try:
                 detail = fut.result()
@@ -234,6 +350,11 @@ def enrich_with_user_details(rows: List[Dict[str, Any]], token: str) -> List[Dic
                     "followers": detail.get("followers"), "following": detail.get("following"),
                     "account_created": detail.get("created_at"), "last_updated": detail.get("updated_at"),
                 })
+
+            done += 1
+            if progress_cb:
+                progress_cb(done, total, rate_limiter)
+
     return out
 
 # ============ 导出 CSV ============
