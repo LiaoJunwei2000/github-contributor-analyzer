@@ -74,6 +74,16 @@ GitHub 网页上显示的贡献者数量 **≠ API 返回数量**，原因如下
 这是 GitHub API 的已知限制，并非工具问题。
     """)
 
+with st.expander("📊 为什么部分仓库的修改行数为 0？"):
+    st.markdown("""
+GitHub 的 `/stats/contributors` 端点**不保证对所有仓库可用**：
+
+- **超大型仓库**（commit 数量极多，如 vllm、PyTorch、Linux）：GitHub 后台统计耗时过长，该端点会返回空数据，导致 `total_additions` / `total_deletions` / `total_changes` 全部显示为 0
+- **这是 GitHub API 的官方已知限制**，并非工具 bug，也无法绕过
+
+此情况下 `total_commits`（来自 `/contributors` 端点）仍然准确，可作为贡献量的主要参考指标。
+    """)
+
 with st.expander("📋 全部可获取字段说明"):
     st.markdown("""
 **表格中展示（核心贡献数据）**
@@ -240,7 +250,7 @@ if run_btn:
     if "avg_changes_per_commit" in df_display.columns:
         df_display["avg_changes_per_commit"] = pd.to_numeric(df_display["avg_changes_per_commit"], errors="coerce").round(1)
 
-    st.caption("点击列标题可对表格进行排序")
+    st.caption("点击列标题可对表格进行排序 · 部分超大型仓库的修改行数为 0，属 GitHub API 已知限制，非工具问题")
     st.dataframe(
         df_display,
         use_container_width=True,
