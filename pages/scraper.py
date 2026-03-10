@@ -6,20 +6,13 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 from dotenv import load_dotenv
-from db import save_repo, save_contributors, get_complete_profiles, get_contributors
-from main import (
-    fetch_repo_details,
-    fetch_all_contributors,
-    poll_contributor_stats,
-    merge_contrib_and_stats,
-    enrich_with_user_details,
-    CSV_FIELDS,
-    RateLimiter,
-)
+from db import get_contributors
+from main import CSV_FIELDS
 from background_jobs import (
-    create_job, update_job, get_job,
-    get_active_job_for_repo, finish_job, cleanup_job,
+    create_job, get_job,
+    get_active_job_for_repo, cleanup_job,
 )
+from runner import run_scrape_job, parse_repo
 
 load_dotenv()
 
@@ -74,85 +67,6 @@ with st.sidebar:
             st.caption(f"每小时重置 · 本次重置时间：{reset_str}")
         else:
             st.caption("⚠️ 无法获取 API 余量（Token 可能无效）")
-
-
-# ============ 后台任务函数 ============
-_PROFILE_FIELDS = [
-    "name", "email", "location", "company", "blog", "bio",
-    "twitter_username", "hireable", "public_repos", "public_gists",
-    "followers", "following", "account_created", "last_updated", "avatar_url",
-]
-
-
-def _run_job(job_id: str, repo: str, token: str, include_anon: bool, resume_mode: bool):
-    """在独立后台线程中运行完整分析流程，切换页面/关闭浏览器不影响执行。"""
-    try:
-        # 1. 仓库基本信息
-        update_job(job_id, phase="repo_info")
-        details = fetch_repo_details(repo, token)
-        if not details:
-            finish_job(job_id, error="无法获取仓库信息，请检查仓库名称和 Token 权限。")
-            return
-        update_job(job_id, details=details)
-
-        # 2. 贡献者列表
-        update_job(job_id, phase="contributors")
-        all_contribs = fetch_all_contributors(repo, token, include_anon)
-        if not all_contribs:
-            finish_job(job_id, error="未能获取贡献者数据。")
-            return
-        update_job(job_id, contrib_count=len(all_contribs))
-
-        # 3. 代码增删统计
-        update_job(job_id, phase="stats")
-        stats = poll_contributor_stats(repo, token)
-
-        # 4. 合并数据
-        update_job(job_id, phase="merging")
-        merged = merge_contrib_and_stats(all_contribs, stats)
-
-        # 5. 续传处理
-        skip_logins = set()
-        existing_profiles = {}
-        if resume_mode:
-            existing_profiles = get_complete_profiles(repo)
-            skip_logins = set(existing_profiles.keys())
-        update_job(job_id, skip_count=len(skip_logins), total=len(merged))
-
-        # 6. 并发抓取用户 Profile
-        update_job(job_id, phase="enriching", done=0, total=len(merged))
-
-        def progress_cb(done: int, total: int, rl: RateLimiter):
-            update_job(job_id,
-                done=done, total=total,
-                rl_status=rl.status,
-                rl_remaining=rl.remaining,
-                rl_wait_s=rl.wait_remaining_seconds(),
-            )
-
-        enriched = enrich_with_user_details(
-            merged, token, skip_logins=skip_logins, progress_cb=progress_cb
-        )
-
-        # 续传：将跳过用户的 Profile 字段从 DB 记录回填
-        for row in enriched:
-            login = row.get("login")
-            if login in existing_profiles and row.get("followers") is None:
-                ep = existing_profiles[login]
-                for f in _PROFILE_FIELDS:
-                    if row.get(f) is None and ep.get(f) is not None:
-                        row[f] = ep[f]
-
-        # 7. 保存到数据库
-        update_job(job_id, phase="saving")
-        save_repo(details)
-        save_contributors(details["full_name"], enriched)
-
-        finish_job(job_id)
-
-    except Exception as e:
-        import traceback
-        finish_job(job_id, error=f"{e}\n\n{traceback.format_exc()}")
 
 
 # ============ 进度显示 ============
@@ -403,7 +317,7 @@ else:
     with col_input:
         repo_input = st.text_input(
             "仓库地址",
-            placeholder="owner/repo，例如：facebook/react",
+            placeholder="owner/repo 或 https://github.com/owner/repo",
         )
     with col_btn:
         st.markdown("<br>", unsafe_allow_html=True)
@@ -419,11 +333,10 @@ else:
         if not token:
             st.error("请在左侧填写 GitHub Token")
             st.stop()
-        if not repo_input or "/" not in repo_input:
-            st.error("请输入正确的仓库格式，例如：facebook/react")
+        repo = parse_repo(repo_input or "")
+        if not repo:
+            st.error("格式不正确，支持：`owner/repo` 或 `https://github.com/owner/repo`")
             st.stop()
-
-        repo = repo_input.strip()
 
         # 如果同一仓库已有正在运行的后台任务，直接重连
         existing_jid = get_active_job_for_repo(repo)
@@ -436,7 +349,7 @@ else:
         st.session_state["job_id"] = job_id
 
         thread = threading.Thread(
-            target=_run_job,
+            target=run_scrape_job,
             args=(job_id, repo, token, include_anon, resume_mode),
             daemon=False,  # 非守护线程：浏览器关闭后继续运行直到完成
         )

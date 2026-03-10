@@ -18,6 +18,7 @@
 - [已知限制](#已知限制)
 - [云端部署](#云端部署streamlit-cloud--supabase)
 - [Git 管理策略](#git-管理策略)
+- [PPT 生成](#ppt-生成)
 
 ---
 
@@ -35,6 +36,9 @@
 | 数据存储 | 本地 SQLite / 云端 PostgreSQL 自动切换 |
 | 可视化看板 | 公司分布、地区热图、Commits 趋势、散点图等 6 种图表 |
 | 数据导出 | 完整 CSV（25 字段），UTF-8 BOM 编码 |
+| **PPT 生成** | 华为浅色版风格，自选贡献者，含封面、概览、名片汇总、个人详情页 |
+| **批量采集** | 一次输入多个仓库，各自独立后台线程并行运行，实时进度表 |
+| **批量 PPT** | 多仓库合并为一份 PPTX，总封面 + 每仓库独立段落 |
 | 使用手册 | 内置教程页面，含 Token 配置步骤和 FAQ |
 
 ---
@@ -68,6 +72,8 @@ source .venv/bin/activate       # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
+> PPT 生成功能需要 `python-pptx` 和 `matplotlib`，已包含在 `requirements.txt` 中。
+
 ### 3. 配置 GitHub Token
 
 ```bash
@@ -98,6 +104,7 @@ streamlit run app.py
 github-contributor-analyzer/
 ├── app.py                      # Streamlit 入口，注册页面导航
 ├── main.py                     # 核心爬取逻辑（API 请求、限速管理、数据处理）
+├── runner.py                   # 共享爬取执行逻辑（无 UI 依赖，供多页面调用）
 ├── db.py                       # 数据库模块（SQLite / PostgreSQL 自动切换）
 ├── background_jobs.py          # 后台任务状态管理（进程级内存）
 ├── requirements.txt            # Python 依赖
@@ -107,8 +114,10 @@ github-contributor-analyzer/
 │   ├── secrets.toml.example    # 配置模板
 │   └── secrets.toml            # 本地配置（gitignore）
 └── pages/
-    ├── scraper.py              # 数据采集页面
+    ├── scraper.py              # 数据采集页面（单仓库）
+    ├── batch_scraper.py        # 批量采集页面（多仓库并行）
     ├── 1_📂_历史数据.py         # 历史数据看板页面
+    ├── ppt_generator.py        # PPT 生成页面（单仓库 & 批量合并）
     └── manual.py               # 使用手册页面
 ```
 
@@ -130,9 +139,10 @@ github-contributor-analyzer/
 | 后台任务 | `threading.Thread(daemon=False)` | 切换页面/关闭浏览器不中断 |
 | GUI 框架 | `Streamlit` | 多页面 Web 应用 |
 | 数据库（本地） | `SQLite` | 无需额外安装 |
-| 数据库（云端） | `PostgreSQL` via `psycopg2` | Supabase 托管 |
+| 数据库（云端） | `PostgreSQL` via `psycopg2` | Supabase 托管，连接池管理 |
 | 数据处理 | `pandas` | DataFrame 操作与 CSV 导出 |
 | 可视化 | `plotly` | 交互式图表 |
+| PPT 生成 | `python-pptx` + `matplotlib` | 华为浅色版风格 PPTX，兼容 Google Slides |
 | 配置管理 | `python-dotenv` + `st.secrets` | 本地 `.env` / 云端 secrets |
 | 进度条 | `tqdm` | CLI 进度显示 |
 
@@ -215,7 +225,7 @@ CREATE TABLE contributors (
 ### 🔍 数据采集
 
 1. 侧边栏填入 GitHub Token（自动显示当前 API 余量）
-2. 输入仓库地址（格式：`owner/repo`，例如 `facebook/react`）
+2. 输入仓库地址（支持 `owner/repo` 或 `https://github.com/owner/repo` 两种格式）
 3. 可选：勾选「包含匿名贡献者」或「⚡ 续传」
 4. 点击「🚀 开始分析」，任务在后台线程运行，可自由切换页面
 5. 返回页面后自动恢复进度显示，完成后展示结果表格并下载 CSV
@@ -231,6 +241,44 @@ CREATE TABLE contributors (
 | 🌐 多维分析 | 公司分布、Commits 直方图、地区分布、Followers vs Commits 散点图、求职状态饼图、代码增删对比 |
 | 📋 数据表格 | 搜索、排序、Top N 滑块，含所有字段 |
 | ⬇️ 导出 | 完整 CSV（25 字段）和精简 CSV（14 字段） |
+
+### 📥 批量采集
+
+1. 在左侧填写 GitHub Token
+2. 在文本框中每行输入一个仓库（支持 `owner/repo` 或完整 GitHub URL）
+3. 点击「🚀 开始批量采集」，每个仓库独立启动后台线程并行运行
+4. 页面每 2 秒自动刷新，表格实时展示各仓库状态（运行中 / 完成 / 失败）
+5. 全部完成后显示汇总，前往「📂 历史数据」查看各仓库结果
+
+> 同一仓库若已有正在运行的任务，会自动接管进度显示，不会重复启动。
+
+### 📊 PPT 生成
+
+**单仓库（「单仓库」标签页）：**
+
+1. 选择已爬取的仓库
+2. 可按公司或地区筛选贡献者
+3. 多选需要详细展示的贡献者（不限数量）
+4. 点击「🚀 生成 PPT」，自动拉取头像并生成 PPTX 文件
+5. 下载后可直接用 Microsoft PowerPoint 或 Google Slides 打开
+
+**批量合并（「批量生成」标签页）：**
+
+1. 多选已采集的仓库
+2. 用滑块设置每个仓库取前 N 名贡献者（默认 10）
+3. 点击「🚀 生成合并 PPT」，所有仓库合并到一份 PPTX
+4. 文件结构：总封面 → 仓库A 段落 → 仓库B 段落 → …
+
+生成内容：
+
+| 页面 | 说明 |
+|------|------|
+| 封面 | 仓库名、总贡献者数、总 Commits、生成日期 |
+| 概览 | 来源公司 Top12 / 来源地区 Top12 柱状图 |
+| 名片汇总 | 3 列 × 2 行固定布局，含头像、排名、公司、地区、联系方式 |
+| 贡献者详情 | 每人一页：头像、Bio、联系信息（超链接）、6 项指标卡、与 Top10 均值对比图 |
+
+> 所有联系方式（GitHub 主页、邮箱、个人网站、Twitter）在 PPT 内均为可点击超链接。
 
 ### 📖 使用手册
 
@@ -360,6 +408,43 @@ git checkout dev
 | `docs` | 文档更新 |
 | `refactor` | 代码重构 |
 | `chore` | 构建/依赖等杂项 |
+
+---
+
+## PPT 生成
+
+### 视觉风格
+
+参考华为官方浅色版模板设计：
+
+| 元素 | 规格 |
+|------|------|
+| 幻灯片尺寸 | 16:9（33.87 × 19.05 cm） |
+| 主色 | 华为红 `#C7000B` |
+| 深色对比 | 暗红 `#6B0004`（封面面板、地区图） |
+| 背景 | 纯白 `#FFFFFF` |
+| 字体 | Arial（兼容 Google Slides） |
+| 页眉 | 白底 + 左侧红竖条 + 底部灰分割线 |
+| 页脚 | 浅灰底条 + 顶部红细线 |
+
+### 名片汇总页布局
+
+固定 **3 列 × 2 行**，每页最多 6 人，超出自动分页。每张名片包含：
+
+- 头像（无头像时显示首字母红色占位块）
+- 排名（🥇🥈🥉 / `#N`）+ 姓名
+- `@login`（红色）
+- 💻 总提交数
+- 🔗 GitHub 主页 / 🏢 公司 / 📍 地区 / 📧 邮箱 / 🌐 主页 / 🐦 推特（均为超链接）
+
+### 图表中文支持
+
+PPT 生成器在模块加载时自动搜索系统 CJK 字体并注册到 matplotlib：
+
+- **macOS**：PingFang SC → STHeiti Light → STHeiti Medium → Songti
+- **Linux**：WQY MicroHei → Noto Sans CJK
+- **Windows**：微软雅黑 → 宋体
+- 找不到时回退 Arial（图表标签显示英文）
 
 ---
 
