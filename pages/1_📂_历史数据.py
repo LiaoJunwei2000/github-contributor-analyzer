@@ -3,7 +3,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from db import init_db, list_repos, get_contributors, delete_repo
+from db import init_db, list_repos, get_contributors, delete_repo, list_tags, get_repo_tags, add_repo_tag, remove_repo_tag
 from main import CSV_FIELDS
 
 st.set_page_config(page_title="历史数据", page_icon="📂", layout="wide")
@@ -42,6 +42,51 @@ with col_lang:
 
 with col_time:
     st.metric("📅 采集时间", str(repo_meta.get("scraped_at", ""))[:16])
+
+# ── 标签 ──────────────────────────────────────────────────
+all_tags = list_tags()
+repo_tags = get_repo_tags(selected_name)
+current_tag_ids = {t["id"] for t in repo_tags}
+all_tag_name_map = {t["name"]: t["id"] for t in all_tags}
+
+tag_col, tag_add_col, tag_rem_col = st.columns([3, 2, 2])
+with tag_col:
+    if repo_tags:
+        badges = " ".join(
+            f"<span style='background:{t['color']};color:#fff;border-radius:4px;"
+            f"padding:2px 8px;font-size:0.82rem'>{t['name']}</span>"
+            for t in repo_tags
+        )
+        st.markdown("**🏷️ 标签** &nbsp;" + badges, unsafe_allow_html=True)
+    else:
+        st.markdown("**🏷️ 标签** &nbsp;<span style='color:#999;font-size:0.85rem'>暂无标签</span>", unsafe_allow_html=True)
+
+with tag_add_col:
+    if all_tags:
+        addable = [t["name"] for t in all_tags if t["id"] not in current_tag_ids]
+        sel_add = st.multiselect(
+            "添加标签", addable,
+            key=f"hist_add_{selected_name}", label_visibility="collapsed",
+            placeholder="添加标签...",
+        )
+        if sel_add:
+            if st.button("✅ 添加", key=f"hist_btn_add_{selected_name}"):
+                for tname in sel_add:
+                    add_repo_tag(selected_name, all_tag_name_map[tname])
+                st.rerun()
+
+with tag_rem_col:
+    if repo_tags:
+        sel_rem = st.multiselect(
+            "移除标签", [t["name"] for t in repo_tags],
+            key=f"hist_rem_{selected_name}", label_visibility="collapsed",
+            placeholder="移除标签...",
+        )
+        if sel_rem:
+            if st.button("❌ 移除", key=f"hist_btn_rem_{selected_name}"):
+                for tname in sel_rem:
+                    remove_repo_tag(selected_name, all_tag_name_map[tname])
+                st.rerun()
 
 # 危险操作：删除（checkbox 确认后才显示删除按钮）
 with st.expander("⚠️ 危险操作"):

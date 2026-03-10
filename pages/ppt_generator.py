@@ -59,7 +59,7 @@ from pptx.util import Cm, Pt, Emu
 from pptx.dml.color import RGBColor
 from pptx.enum.text import PP_ALIGN
 
-from db import list_repos, get_contributors
+from db import list_repos, get_contributors, list_tags, get_repos_by_tags
 
 # ── 华为浅色版配色 ────────────────────────────────────────────
 C_RED    = RGBColor(0xC7, 0x00, 0x0B)   # 华为红（主色）
@@ -976,6 +976,7 @@ if not repos:
     st.stop()
 
 all_repo_names = [r["full_name"] for r in repos]
+_all_tags = list_tags()
 
 # ── 初始化 session state ──────────────────────────────────
 if "ppt_repos" not in st.session_state:
@@ -993,12 +994,29 @@ col_repo_l, col_repo_r = st.columns(2)
 
 with col_repo_l:
     st.markdown("**全部仓库**")
+
+    # 标签筛选（有标签时显示）
+    if _all_tags:
+        tag_filter = st.multiselect(
+            "按标签筛选", [t["name"] for t in _all_tags],
+            key="ppt_tag_filter", placeholder="选择标签（不选=显示全部）",
+            label_visibility="collapsed",
+        )
+        if tag_filter:
+            _filter_tag_ids = [t["id"] for t in _all_tags if t["name"] in tag_filter]
+            _tagged_repos = set(get_repos_by_tags(_filter_tag_ids))
+            _base_repos = [r for r in all_repo_names if r in _tagged_repos]
+        else:
+            _base_repos = all_repo_names
+    else:
+        _base_repos = all_repo_names
+
     repo_search = st.text_input(
         "搜索仓库", placeholder="输入关键词筛选...",
         key="ppt_repo_search", label_visibility="collapsed",
     )
     kw = repo_search.strip().lower()
-    visible_repos = [r for r in all_repo_names if kw in r.lower()] if kw else all_repo_names
+    visible_repos = [r for r in _base_repos if kw in r.lower()] if kw else _base_repos
 
     # ── 全选 / 取消全选（操作当前可见列表）──
     def _select_all_visible(vlist=None):

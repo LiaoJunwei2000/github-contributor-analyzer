@@ -97,6 +97,20 @@ def init_db():
 def _init_postgres():
     with _pg_cursor() as cur:
         cur.execute("""
+            CREATE TABLE IF NOT EXISTS tags (
+                id    SERIAL PRIMARY KEY,
+                name  TEXT UNIQUE NOT NULL,
+                color TEXT DEFAULT '#6B6B6B'
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS repo_tags (
+                repo_full_name TEXT NOT NULL,
+                tag_id         INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+                PRIMARY KEY (repo_full_name, tag_id)
+            )
+        """)
+        cur.execute("""
             CREATE TABLE IF NOT EXISTS repos (
                 id          SERIAL PRIMARY KEY,
                 full_name   TEXT UNIQUE NOT NULL,
@@ -148,6 +162,16 @@ def _init_postgres():
 def _init_sqlite():
     with _sqlite_cursor() as cur:
         cur.executescript("""
+            CREATE TABLE IF NOT EXISTS tags (
+                id    INTEGER PRIMARY KEY AUTOINCREMENT,
+                name  TEXT UNIQUE NOT NULL,
+                color TEXT DEFAULT '#6B6B6B'
+            );
+            CREATE TABLE IF NOT EXISTS repo_tags (
+                repo_full_name TEXT NOT NULL,
+                tag_id         INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+                PRIMARY KEY (repo_full_name, tag_id)
+            );
             CREATE TABLE IF NOT EXISTS repos (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 full_name   TEXT UNIQUE NOT NULL,
@@ -330,4 +354,106 @@ def delete_repo(repo_full_name: str):
     p = _ph()
     with _get_cursor() as cur:
         cur.execute(f"DELETE FROM contributors WHERE repo_full_name = {p}", (repo_full_name,))
+        cur.execute(f"DELETE FROM repo_tags WHERE repo_full_name = {p}", (repo_full_name,))
         cur.execute(f"DELETE FROM repos WHERE full_name = {p}", (repo_full_name,))
+
+
+# ── Tag CRUD ───────────────────────────────────────────────
+def create_tag(name: str, color: str = "#6B6B6B") -> Dict:
+    p = _ph()
+    with _get_cursor() as cur:
+        if _use_postgres():
+            cur.execute(
+                f"INSERT INTO tags (name, color) VALUES ({p},{p}) ON CONFLICT (name) DO NOTHING RETURNING *",
+                (name, color),
+            )
+            row = cur.fetchone()
+            if row:
+                return dict(row)
+            cur.execute(f"SELECT * FROM tags WHERE name = {p}", (name,))
+            return dict(cur.fetchone())
+        else:
+            cur.execute(
+                f"INSERT OR IGNORE INTO tags (name, color) VALUES ({p},{p})",
+                (name, color),
+            )
+            cur.execute(f"SELECT * FROM tags WHERE name = {p}", (name,))
+            return dict(cur.fetchone())
+
+
+def list_tags() -> List[Dict]:
+    with _get_cursor() as cur:
+        cur.execute("SELECT * FROM tags ORDER BY name ASC")
+        return [dict(r) for r in cur.fetchall()]
+
+
+def update_tag(tag_id: int, name: str = None, color: str = None):
+    p = _ph()
+    updates = []
+    vals = []
+    if name is not None:
+        updates.append(f"name = {p}")
+        vals.append(name)
+    if color is not None:
+        updates.append(f"color = {p}")
+        vals.append(color)
+    if not updates:
+        return
+    vals.append(tag_id)
+    with _get_cursor() as cur:
+        cur.execute(f"UPDATE tags SET {', '.join(updates)} WHERE id = {p}", vals)
+
+
+def delete_tag(tag_id: int):
+    p = _ph()
+    with _get_cursor() as cur:
+        cur.execute(f"DELETE FROM repo_tags WHERE tag_id = {p}", (tag_id,))
+        cur.execute(f"DELETE FROM tags WHERE id = {p}", (tag_id,))
+
+
+def get_repo_tags(repo_full_name: str) -> List[Dict]:
+    p = _ph()
+    with _get_cursor() as cur:
+        cur.execute(
+            f"SELECT t.* FROM tags t JOIN repo_tags rt ON t.id = rt.tag_id WHERE rt.repo_full_name = {p} ORDER BY t.name",
+            (repo_full_name,),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
+def add_repo_tag(repo_full_name: str, tag_id: int):
+    p = _ph()
+    with _get_cursor() as cur:
+        if _use_postgres():
+            cur.execute(
+                f"INSERT INTO repo_tags (repo_full_name, tag_id) VALUES ({p},{p}) ON CONFLICT DO NOTHING",
+                (repo_full_name, tag_id),
+            )
+        else:
+            cur.execute(
+                f"INSERT OR IGNORE INTO repo_tags (repo_full_name, tag_id) VALUES ({p},{p})",
+                (repo_full_name, tag_id),
+            )
+
+
+def remove_repo_tag(repo_full_name: str, tag_id: int):
+    p = _ph()
+    with _get_cursor() as cur:
+        cur.execute(
+            f"DELETE FROM repo_tags WHERE repo_full_name = {p} AND tag_id = {p}",
+            (repo_full_name, tag_id),
+        )
+
+
+def get_repos_by_tags(tag_ids: List[int]) -> List[str]:
+    """返回拥有所有指定标签之一的仓库名称列表（OR 逻辑）。"""
+    if not tag_ids:
+        return []
+    p = _ph()
+    placeholders = ",".join([p] * len(tag_ids))
+    with _get_cursor() as cur:
+        cur.execute(
+            f"SELECT DISTINCT repo_full_name FROM repo_tags WHERE tag_id IN ({placeholders})",
+            tag_ids,
+        )
+        return [r["repo_full_name"] for r in cur.fetchall()]
