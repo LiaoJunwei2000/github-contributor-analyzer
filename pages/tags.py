@@ -102,33 +102,44 @@ for repo in repos:
         else:
             st.caption("暂无标签")
 
-        # 添加标签
+        # 添加 / 移除标签（均支持多选）
         add_col, rem_col = st.columns(2)
+        addable = [t["name"] for t in tags if t["id"] not in current_ids]
+
+        def _add(r=rname, tmap=all_tag_names):
+            for tname in st.session_state.get(f"repo_add_{r}", []):
+                add_repo_tag(r, tmap[tname])
+
+        def _rem(r=rname, tmap=all_tag_names):
+            for tname in st.session_state.get(f"repo_rem_{r}", []):
+                remove_repo_tag(r, tmap[tname])
+
         with add_col:
-            addable = [t["name"] for t in tags if t["id"] not in current_ids]
-            if addable:
-                sel_add = st.multiselect(
-                    "添加标签", addable,
-                    key=f"repo_add_{rname}", label_visibility="collapsed",
-                    placeholder="选择要添加的标签...",
-                )
-                if sel_add:
-                    if st.button("✅ 添加", key=f"btn_add_{rname}"):
-                        for tname in sel_add:
-                            add_repo_tag(rname, all_tag_names[tname])
-                        st.rerun()
-            else:
-                st.caption("已添加全部标签")
+            sel_add = st.multiselect(
+                "添加标签（可多选）", addable,
+                key=f"repo_add_{rname}",
+                placeholder="选择要贴上的标签...",
+                disabled=not addable,
+            )
+            st.button(
+                "✅ 贴上选中标签",
+                key=f"btn_add_{rname}",
+                disabled=not sel_add,
+                on_click=_add,
+                use_container_width=True,
+            )
 
         with rem_col:
-            if current_tags:
-                sel_rem = st.multiselect(
-                    "移除标签", [t["name"] for t in current_tags],
-                    key=f"repo_rem_{rname}", label_visibility="collapsed",
-                    placeholder="选择要移除的标签...",
-                )
-                if sel_rem:
-                    if st.button("❌ 移除", key=f"btn_rem_{rname}"):
-                        for tname in sel_rem:
-                            remove_repo_tag(rname, all_tag_names[tname])
-                        st.rerun()
+            sel_rem = st.multiselect(
+                "移除标签（可多选）", [t["name"] for t in current_tags],
+                key=f"repo_rem_{rname}",
+                placeholder="选择要移除的标签...",
+                disabled=not current_tags,
+            )
+            st.button(
+                "❌ 移除选中标签",
+                key=f"btn_rem_{rname}",
+                disabled=not sel_rem,
+                on_click=_rem,
+                use_container_width=True,
+            )
