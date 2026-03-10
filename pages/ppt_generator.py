@@ -59,7 +59,7 @@ from pptx.util import Cm, Pt, Emu
 from pptx.dml.color import RGBColor
 from pptx.enum.text import PP_ALIGN
 
-from db import list_repos, get_contributors, list_tags, get_repos_by_tags
+from db import list_repos, get_contributors, list_tags, get_repos_by_tags, get_all_repo_tags
 
 # ── 华为浅色版配色 ────────────────────────────────────────────
 C_RED    = RGBColor(0xC7, 0x00, 0x0B)   # 华为红（主色）
@@ -977,6 +977,7 @@ if not repos:
 
 all_repo_names = [r["full_name"] for r in repos]
 _all_tags = list_tags()
+_repo_tag_map = get_all_repo_tags()   # {repo: [{"id", "name", "color"}, ...]}
 
 # ── 初始化 session state ──────────────────────────────────
 if "ppt_repos" not in st.session_state:
@@ -1050,6 +1051,17 @@ with col_repo_l:
             on_click=functools.partial(_deselect_all_visible, visible_repos),
         )
 
+    def _tag_badges_html(repo_name: str, font_size: str = "0.75rem") -> str:
+        tags = _repo_tag_map.get(repo_name, [])
+        if not tags:
+            return ""
+        return " ".join(
+            f"<span style='background:{t['color']};color:#fff;border-radius:3px;"
+            f"padding:1px 6px;font-size:{font_size};display:inline-block;margin:1px'>"
+            f"{t['name']}</span>"
+            for t in tags
+        )
+
     for repo in visible_repos:
         checked = st.checkbox(f"📦 {repo}", key=f"ppt_cb_{repo}")
         if checked and repo not in st.session_state["ppt_repos"]:
@@ -1058,6 +1070,12 @@ with col_repo_l:
                 st.session_state["ppt_contribs"][repo] = []
         elif not checked and repo in st.session_state["ppt_repos"]:
             st.session_state["ppt_repos"].remove(repo)
+        badges_html = _tag_badges_html(repo)
+        if badges_html:
+            st.markdown(
+                f"<div style='margin:-8px 0 4px 26px'>{badges_html}</div>",
+                unsafe_allow_html=True,
+            )
 
 with col_repo_r:
     st.markdown("**已选仓库**")
@@ -1069,6 +1087,9 @@ with col_repo_r:
             with rc1:
                 n_c = len(st.session_state["ppt_contribs"].get(repo, []))
                 st.markdown(f"📦 `{repo}`" + (f"  · **{n_c} 人已选**" if n_c else ""))
+                badges_html = _tag_badges_html(repo)
+                if badges_html:
+                    st.markdown(badges_html, unsafe_allow_html=True)
             with rc2:
                 if st.button("×", key=f"ppt_rm_repo_{repo}", help="移除该仓库"):
                     st.session_state["ppt_repos"].remove(repo)

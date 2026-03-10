@@ -1,5 +1,5 @@
 import streamlit as st
-from db import init_db, list_tags, create_tag, update_tag, delete_tag, list_repos, get_repo_tags, add_repo_tag, remove_repo_tag
+from db import init_db, list_tags, create_tag, update_tag, delete_tag, list_repos, get_repo_tags, add_repo_tag, remove_repo_tag, get_all_repo_tags
 
 st.set_page_config(page_title="标签管理", page_icon="🏷️", layout="centered")
 init_db()
@@ -70,8 +70,8 @@ else:
 
 st.markdown("---")
 
-# ── 仓库打标签 ────────────────────────────────────────────
-st.subheader("给仓库贴标签")
+# ── 批量打标签 ────────────────────────────────────────────
+st.subheader("批量打标签")
 repos = list_repos()
 if not repos:
     st.info("数据库中暂无仓库，请先在「数据采集」页面爬取数据。")
@@ -82,27 +82,87 @@ if not tags:
     st.info("请先在上方创建标签。")
     st.stop()
 
-tag_map = {t["id"]: t for t in tags}
 all_tag_names = {t["name"]: t["id"] for t in tags}
+repo_tag_map = get_all_repo_tags()   # {rname: [tag_dict, ...]}
 
+def _badges(rname: str) -> str:
+    ts = repo_tag_map.get(rname, [])
+    return " ".join(
+        f"<span style='background:{t['color']};color:#fff;border-radius:3px;"
+        f"padding:1px 6px;font-size:0.78rem'>{t['name']}</span>"
+        for t in ts
+    )
+
+# 仓库选项：名称 + 已有标签文字（用于 format_func）
+def _repo_label(rname: str) -> str:
+    ts = repo_tag_map.get(rname, [])
+    tag_str = "  [" + ", ".join(t["name"] for t in ts) + "]" if ts else ""
+    return f"📦 {rname}{tag_str}"
+
+bc1, bc2 = st.columns([2, 4])
+with bc1:
+    batch_tag = st.selectbox(
+        "选择要操作的标签",
+        [t["name"] for t in tags],
+        key="batch_tag_sel",
+    )
+with bc2:
+    batch_repos = st.multiselect(
+        "选择仓库（可多选）",
+        [r["full_name"] for r in repos],
+        key="batch_repos_sel",
+        placeholder="选择一个或多个仓库...",
+        format_func=_repo_label,
+    )
+
+def _batch_add():
+    tid = all_tag_names.get(st.session_state.get("batch_tag_sel", ""))
+    if tid is None:
+        return
+    for rname in st.session_state.get("batch_repos_sel", []):
+        add_repo_tag(rname, tid)
+
+def _batch_rem():
+    tid = all_tag_names.get(st.session_state.get("batch_tag_sel", ""))
+    if tid is None:
+        return
+    for rname in st.session_state.get("batch_repos_sel", []):
+        remove_repo_tag(rname, tid)
+
+bb1, bb2 = st.columns(2)
+with bb1:
+    st.button(
+        "✅ 批量贴上标签",
+        disabled=not batch_repos,
+        on_click=_batch_add,
+        use_container_width=True,
+        type="primary",
+    )
+with bb2:
+    st.button(
+        "❌ 批量移除标签",
+        disabled=not batch_repos,
+        on_click=_batch_rem,
+        use_container_width=True,
+    )
+
+st.markdown("---")
+
+# ── 仓库标签总览 ──────────────────────────────────────────
+st.subheader("仓库标签总览")
 for repo in repos:
     rname = repo["full_name"]
-    current_tags = get_repo_tags(rname)
+    current_tags = repo_tag_map.get(rname, [])
     current_ids = {t["id"] for t in current_tags}
 
-    with st.expander(f"📦 {rname}", expanded=False):
-        # 显示已有标签
-        if current_tags:
-            badges = " ".join(
-                f"<span style='background:{t['color']};color:#fff;border-radius:4px;"
-                f"padding:2px 8px;font-size:0.82rem'>{t['name']}</span>"
-                for t in current_tags
-            )
-            st.markdown(badges, unsafe_allow_html=True)
+    badges_html = _badges(rname)
+    header = f"📦 {rname}" + ("" if not current_tags else "")
+    with st.expander(header, expanded=False):
+        if badges_html:
+            st.markdown(badges_html, unsafe_allow_html=True)
         else:
             st.caption("暂无标签")
 
-        # 添加 / 移除标签（均支持多选）
         add_col, rem_col = st.columns(2)
         addable = [t["name"] for t in tags if t["id"] not in current_ids]
 
@@ -116,13 +176,13 @@ for repo in repos:
 
         with add_col:
             sel_add = st.multiselect(
-                "添加标签（可多选）", addable,
+                "添加标签", addable,
                 key=f"repo_add_{rname}",
                 placeholder="选择要贴上的标签...",
                 disabled=not addable,
             )
             st.button(
-                "✅ 贴上选中标签",
+                "✅ 贴上",
                 key=f"btn_add_{rname}",
                 disabled=not sel_add,
                 on_click=_add,
@@ -131,13 +191,13 @@ for repo in repos:
 
         with rem_col:
             sel_rem = st.multiselect(
-                "移除标签（可多选）", [t["name"] for t in current_tags],
+                "移除标签", [t["name"] for t in current_tags],
                 key=f"repo_rem_{rname}",
                 placeholder="选择要移除的标签...",
                 disabled=not current_tags,
             )
             st.button(
-                "❌ 移除选中标签",
+                "❌ 移除",
                 key=f"btn_rem_{rname}",
                 disabled=not sel_rem,
                 on_click=_rem,

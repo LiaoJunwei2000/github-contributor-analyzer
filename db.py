@@ -445,6 +445,22 @@ def remove_repo_tag(repo_full_name: str, tag_id: int):
         )
 
 
+def get_all_repo_tags() -> Dict[str, List[Dict]]:
+    """返回所有仓库的标签映射 {repo_full_name: [tag_dict, ...]}，一次查询。"""
+    with _get_cursor() as cur:
+        cur.execute("""
+            SELECT rt.repo_full_name, t.id, t.name, t.color
+            FROM tags t JOIN repo_tags rt ON t.id = rt.tag_id
+            ORDER BY rt.repo_full_name, t.name
+        """)
+        result: Dict[str, List[Dict]] = {}
+        for row in cur.fetchall():
+            r = dict(row)
+            rname = r.pop("repo_full_name")
+            result.setdefault(rname, []).append(r)
+        return result
+
+
 def get_repos_by_tags(tag_ids: List[int]) -> List[str]:
     """返回拥有所有指定标签之一的仓库名称列表（OR 逻辑）。"""
     if not tag_ids:
