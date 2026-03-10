@@ -1000,6 +1000,38 @@ with col_repo_l:
     kw = repo_search.strip().lower()
     visible_repos = [r for r in all_repo_names if kw in r.lower()] if kw else all_repo_names
 
+    # ── 全选 / 取消全选（操作当前可见列表）──
+    def _select_all_visible(vlist=None):
+        for r in (vlist or []):
+            st.session_state[f"ppt_cb_{r}"] = True
+            if r not in st.session_state["ppt_repos"]:
+                st.session_state["ppt_repos"].append(r)
+            if r not in st.session_state["ppt_contribs"]:
+                st.session_state["ppt_contribs"][r] = []
+
+    def _deselect_all_visible(vlist=None):
+        for r in (vlist or []):
+            st.session_state[f"ppt_cb_{r}"] = False
+            if r in st.session_state["ppt_repos"]:
+                st.session_state["ppt_repos"].remove(r)
+
+    import functools
+    sa_col, da_col = st.columns(2)
+    with sa_col:
+        st.button(
+            "全选" if not kw else f"全选结果（{len(visible_repos)}）",
+            key="ppt_select_all",
+            use_container_width=True,
+            on_click=functools.partial(_select_all_visible, visible_repos),
+        )
+    with da_col:
+        st.button(
+            "取消全选",
+            key="ppt_deselect_all",
+            use_container_width=True,
+            on_click=functools.partial(_deselect_all_visible, visible_repos),
+        )
+
     for repo in visible_repos:
         checked = st.checkbox(f"📦 {repo}", key=f"ppt_cb_{repo}")
         if checked and repo not in st.session_state["ppt_repos"]:
@@ -1032,7 +1064,18 @@ with col_repo_r:
 if st.session_state["ppt_repos"]:
     st.markdown("---")
     st.subheader("② 筛选贡献者")
-    st.caption("展开每个仓库，通过公司 / 地区筛选候选人，再移入已选栏。")
+
+    # ── 统一检索栏 ──────────────────────────────────────────
+    contrib_search = st.text_input(
+        "🔍 跨仓库搜索贡献者（公司 / 地区）",
+        placeholder="输入关键词，如：新加坡、Google、China、US …",
+        key="ppt_contrib_search",
+    )
+    ckw = contrib_search.strip().lower()
+    if ckw:
+        st.caption(f"已筛选：仅显示公司或地区包含「{contrib_search.strip()}」的贡献者")
+    else:
+        st.caption("不填则显示全部贡献者，展开下方每个仓库进行操作。")
 
     for repo in st.session_state["ppt_repos"]:
         if repo not in st.session_state["ppt_contribs"]:
@@ -1046,25 +1089,15 @@ if st.session_state["ppt_repos"]:
                 st.warning("该仓库暂无贡献者数据。")
                 continue
 
-            # ── 筛选行 ──
-            f1, f2 = st.columns(2)
-            with f1:
-                cos = sorted(
-                    df_repo["company"].dropna().str.strip().str.lstrip("@").unique().tolist()
+            # 应用统一检索（匹配公司或地区，大小写不敏感）
+            if ckw:
+                mask = (
+                    df_repo["location"].fillna("").str.lower().str.contains(ckw, regex=False) |
+                    df_repo["company"].fillna("").str.lower().str.contains(ckw, regex=False)
                 )
-                filter_co = st.selectbox("公司筛选", ["全部"] + cos, key=f"ppt_co_{repo}")
-            with f2:
-                all_regions = sorted(
-                    {_extract_region(loc) for loc in df_repo["location"].dropna() if _extract_region(loc)}
-                )
-                filter_rg = st.selectbox("地区筛选", ["全部"] + all_regions, key=f"ppt_rg_{repo}")
-
-            # 应用筛选
-            df_f = df_repo.copy()
-            if filter_co != "全部":
-                df_f = df_f[df_f["company"].str.strip().str.lstrip("@") == filter_co]
-            if filter_rg != "全部":
-                df_f = df_f[df_f["location"].apply(_extract_region) == filter_rg]
+                df_f = df_repo[mask].copy()
+            else:
+                df_f = df_repo.copy()
 
             # ── 双栏 ──
             col_cand, col_sel = st.columns(2)
