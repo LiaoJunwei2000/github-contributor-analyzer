@@ -27,11 +27,6 @@ history = st.Page(
     title="历史数据",
     icon="📂",
 )
-cross_search = st.Page(
-    "pages/cross_search.py",
-    title="跨仓库搜索",
-    icon="🔎",
-)
 ppt = st.Page(
     "pages/ppt_generator.py",
     title="PPT 生成",
@@ -48,7 +43,7 @@ manual = st.Page(
     icon="📖",
 )
 
-pg = st.navigation([scraper, batch, history, cross_search, ppt, tags, manual])
+pg = st.navigation([scraper, batch, history, ppt, tags, manual])
 
 # ── 移动端响应式 CSS ──
 st.markdown("""
