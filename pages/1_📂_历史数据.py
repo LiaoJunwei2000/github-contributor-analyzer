@@ -3,7 +3,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from db import init_db, list_repos, get_contributors, delete_repo
+from db import init_db, list_repos, get_contributors, delete_repo, list_tags, get_repo_tags, add_repo_tag, remove_repo_tag, get_repos_by_tags
 from main import CSV_FIELDS
 
 st.set_page_config(page_title="历史数据", page_icon="📂", layout="wide")
@@ -11,17 +11,37 @@ init_db()
 
 st.title("📂 历史数据浏览")
 
-# ── 仓库列表 ──────────────────────────────────────────────
-repos = list_repos()
-if not repos:
+# ── 仓库列表 + 标签数据 ────────────────────────────────────
+all_repos = list_repos()
+if not all_repos:
     st.warning("数据库为空，请先在「数据采集」页面爬取至少一个仓库。")
     st.stop()
+
+all_tags = list_tags()
+all_tag_name_map = {t["name"]: t["id"] for t in all_tags}
+
+# ── 按标签筛选仓库（可选）─────────────────────────────────
+repos = all_repos
+if all_tags:
+    tag_filter_names = st.multiselect(
+        "🏷️ 按标签筛选仓库",
+        [t["name"] for t in all_tags],
+        key="hist_tag_filter",
+        placeholder="选择标签（不选 = 显示全部仓库）",
+    )
+    if tag_filter_names:
+        filter_ids = [all_tag_name_map[n] for n in tag_filter_names]
+        tagged_set = set(get_repos_by_tags(filter_ids))
+        repos = [r for r in all_repos if r["full_name"] in tagged_set]
+        if not repos:
+            st.info("没有符合标签筛选的仓库，请调整筛选条件。")
+            st.stop()
 
 # ── 仓库选择 + 元信息 ─────────────────────────────────────
 col_sel, col_stars, col_forks, col_lang, col_time = st.columns([3, 1, 1, 1, 2])
 
 with col_sel:
-    repo_options = {f"{r['full_name']}": r for r in repos}
+    repo_options = {r["full_name"]: r for r in repos}
     selected_name = st.selectbox(
         "选择仓库",
         list(repo_options.keys()),
@@ -30,6 +50,18 @@ with col_sel:
     repo_meta = repo_options[selected_name]
     if repo_meta.get("description"):
         st.caption(repo_meta["description"])
+
+    # 标签色块显示在选择框卡片内
+    repo_tags = get_repo_tags(selected_name)
+    current_tag_ids = {t["id"] for t in repo_tags}
+    if repo_tags:
+        badges = " ".join(
+            f"<span style='background:{t['color']};color:#fff;border-radius:4px;"
+            f"padding:2px 8px;font-size:0.8rem;display:inline-block;margin:1px'>"
+            f"{t['name']}</span>"
+            for t in repo_tags
+        )
+        st.markdown(badges, unsafe_allow_html=True)
 
 with col_stars:
     st.metric("⭐ Stars", f"{repo_meta.get('stars', 0):,}")
@@ -42,6 +74,50 @@ with col_lang:
 
 with col_time:
     st.metric("📅 采集时间", str(repo_meta.get("scraped_at", ""))[:16])
+
+# ── 标签操作（贴标签 / 移除标签，均支持多选）──────────────
+if all_tags:
+    tag_add_col, tag_rem_col = st.columns(2)
+
+    addable = [t["name"] for t in all_tags if t["id"] not in current_tag_ids]
+
+    def _do_add_tags(repo=selected_name, tmap=all_tag_name_map):
+        for tname in st.session_state.get(f"hist_add_{repo}", []):
+            add_repo_tag(repo, tmap[tname])
+
+    def _do_rem_tags(repo=selected_name, tmap=all_tag_name_map):
+        for tname in st.session_state.get(f"hist_rem_{repo}", []):
+            remove_repo_tag(repo, tmap[tname])
+
+    with tag_add_col:
+        sel_add = st.multiselect(
+            "添加标签（可多选）", addable,
+            key=f"hist_add_{selected_name}",
+            placeholder="选择要贴上的标签...",
+            disabled=not addable,
+        )
+        st.button(
+            "✅ 贴上选中标签",
+            key=f"hist_btn_add_{selected_name}",
+            disabled=not sel_add,
+            on_click=_do_add_tags,
+            use_container_width=True,
+        )
+
+    with tag_rem_col:
+        sel_rem = st.multiselect(
+            "移除标签（可多选）", [t["name"] for t in repo_tags],
+            key=f"hist_rem_{selected_name}",
+            placeholder="选择要移除的标签...",
+            disabled=not repo_tags,
+        )
+        st.button(
+            "❌ 移除选中标签",
+            key=f"hist_btn_rem_{selected_name}",
+            disabled=not sel_rem,
+            on_click=_do_rem_tags,
+            use_container_width=True,
+        )
 
 # 危险操作：删除（checkbox 确认后才显示删除按钮）
 with st.expander("⚠️ 危险操作"):

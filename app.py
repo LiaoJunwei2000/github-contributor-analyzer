@@ -32,13 +32,18 @@ ppt = st.Page(
     title="PPT 生成",
     icon="📊",
 )
+tags = st.Page(
+    "pages/tags.py",
+    title="标签管理",
+    icon="🏷️",
+)
 manual = st.Page(
     "pages/manual.py",
     title="使用手册",
     icon="📖",
 )
 
-pg = st.navigation([scraper, batch, history, ppt, manual])
+pg = st.navigation([scraper, batch, history, ppt, tags, manual])
 
 # ── 移动端响应式 CSS ──
 st.markdown("""
