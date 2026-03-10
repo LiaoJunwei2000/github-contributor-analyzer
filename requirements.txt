@@ -5,3 +5,5 @@ pandas>=2.0
 python-dotenv>=1.0
 plotly>=5.20
 psycopg2-binary>=2.9
+python-pptx>=0.6.21
+matplotlib>=3.7

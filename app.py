@@ -17,10 +17,20 @@ scraper = st.Page(
     icon="🔍",
     default=True,
 )
+batch = st.Page(
+    "pages/batch_scraper.py",
+    title="批量采集",
+    icon="📥",
+)
 history = st.Page(
     "pages/1_📂_历史数据.py",
     title="历史数据",
     icon="📂",
+)
+ppt = st.Page(
+    "pages/ppt_generator.py",
+    title="PPT 生成",
+    icon="📊",
 )
 manual = st.Page(
     "pages/manual.py",
@@ -28,7 +38,7 @@ manual = st.Page(
     icon="📖",
 )
 
-pg = st.navigation([scraper, history, manual])
+pg = st.navigation([scraper, batch, history, ppt, manual])
 
 # ── 移动端响应式 CSS ──
 st.markdown("""

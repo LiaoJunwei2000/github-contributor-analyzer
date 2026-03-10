@@ -1,3 +1,4 @@
+import re
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -276,8 +277,6 @@ with tab2:
             def extract_region(loc):
                 parts = str(loc).split(",")
                 region = parts[-1].strip()
-                # 去除纯数字或空白部分，尝试上一段
-                import re
                 if re.match(r"^\d[\d\s\-]*$", region) or region == "":
                     region = parts[-2].strip() if len(parts) >= 2 else region
                 return region

@@ -1,10 +1,14 @@
 import os
 import sqlite3
+import threading
 from contextlib import contextmanager
 from datetime import datetime
 from typing import List, Dict, Any
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "contributors.db")
+
+_pg_pool = None
+_pg_pool_lock = threading.Lock()
 
 
 def _get_database_url() -> str:
@@ -28,15 +32,27 @@ def _now() -> str:
 
 
 # ── PostgreSQL ────────────────────────────────────────────────
+def _get_pg_pool():
+    global _pg_pool
+    if _pg_pool is not None:
+        return _pg_pool
+    with _pg_pool_lock:
+        if _pg_pool is None:
+            import psycopg2.pool
+            _pg_pool = psycopg2.pool.ThreadedConnectionPool(
+                1, 10,
+                _get_database_url(),
+                sslmode="require",
+            )
+    return _pg_pool
+
+
 @contextmanager
 def _pg_cursor():
-    import psycopg2
     import psycopg2.extras
-    conn = psycopg2.connect(
-        _get_database_url(),
-        cursor_factory=psycopg2.extras.RealDictCursor,
-        sslmode="require",
-    )
+    pool = _get_pg_pool()
+    conn = pool.getconn()
+    conn.cursor_factory = psycopg2.extras.RealDictCursor
     cur = conn.cursor()
     try:
         yield cur
@@ -46,7 +62,7 @@ def _pg_cursor():
         raise
     finally:
         cur.close()
-        conn.close()
+        pool.putconn(conn)
 
 
 # ── SQLite ────────────────────────────────────────────────────
@@ -216,65 +232,71 @@ def save_repo(details: Dict[str, Any]):
 
 
 def save_contributors(repo_full_name: str, contributors: List[Dict[str, Any]]):
+    if not contributors:
+        return
     p = _ph()
     placeholders = ",".join([p] * 29)
+    now = _now()
+    all_vals = [
+        (
+            repo_full_name,
+            c.get("rank"), c.get("login"), c.get("user_id"),
+            c.get("name"), c.get("company"), c.get("location"),
+            c.get("email"), c.get("blog"), c.get("twitter_username"),
+            1 if c.get("hireable") else 0,
+            c.get("bio"), c.get("public_repos"), c.get("public_gists"),
+            c.get("followers"), c.get("following"),
+            c.get("total_commits"), c.get("total_additions"), c.get("total_deletions"),
+            c.get("net_lines"), c.get("total_changes"),
+            c.get("avg_changes_per_commit"), c.get("addition_deletion_ratio"),
+            c.get("contributions_on_default_branch"),
+            c.get("profile_url"), c.get("avatar_url"),
+            c.get("account_created"), c.get("last_updated"), now,
+        )
+        for c in contributors
+    ]
     with _get_cursor() as cur:
-        for c in contributors:
-            vals = (
-                repo_full_name,
-                c.get("rank"), c.get("login"), c.get("user_id"),
-                c.get("name"), c.get("company"), c.get("location"),
-                c.get("email"), c.get("blog"), c.get("twitter_username"),
-                1 if c.get("hireable") else 0,
-                c.get("bio"), c.get("public_repos"), c.get("public_gists"),
-                c.get("followers"), c.get("following"),
-                c.get("total_commits"), c.get("total_additions"), c.get("total_deletions"),
-                c.get("net_lines"), c.get("total_changes"),
-                c.get("avg_changes_per_commit"), c.get("addition_deletion_ratio"),
-                c.get("contributions_on_default_branch"),
-                c.get("profile_url"), c.get("avatar_url"),
-                c.get("account_created"), c.get("last_updated"), _now(),
-            )
-            if _use_postgres():
-                cur.execute(f"""
-                    INSERT INTO contributors (
-                        repo_full_name, rank, login, user_id, name, company, location,
-                        email, blog, twitter_username, hireable, bio,
-                        public_repos, public_gists, followers, following,
-                        total_commits, total_additions, total_deletions,
-                        net_lines, total_changes, avg_changes_per_commit,
-                        addition_deletion_ratio, contributions_on_default_branch,
-                        profile_url, avatar_url, account_created, last_updated, scraped_at
-                    ) VALUES ({placeholders})
-                    ON CONFLICT (repo_full_name, login) DO UPDATE SET
-                        rank=EXCLUDED.rank, user_id=EXCLUDED.user_id, name=EXCLUDED.name,
-                        company=EXCLUDED.company, location=EXCLUDED.location, email=EXCLUDED.email,
-                        blog=EXCLUDED.blog, twitter_username=EXCLUDED.twitter_username,
-                        hireable=EXCLUDED.hireable, bio=EXCLUDED.bio,
-                        public_repos=EXCLUDED.public_repos, public_gists=EXCLUDED.public_gists,
-                        followers=EXCLUDED.followers, following=EXCLUDED.following,
-                        total_commits=EXCLUDED.total_commits, total_additions=EXCLUDED.total_additions,
-                        total_deletions=EXCLUDED.total_deletions, net_lines=EXCLUDED.net_lines,
-                        total_changes=EXCLUDED.total_changes,
-                        avg_changes_per_commit=EXCLUDED.avg_changes_per_commit,
-                        addition_deletion_ratio=EXCLUDED.addition_deletion_ratio,
-                        contributions_on_default_branch=EXCLUDED.contributions_on_default_branch,
-                        profile_url=EXCLUDED.profile_url, avatar_url=EXCLUDED.avatar_url,
-                        account_created=EXCLUDED.account_created, last_updated=EXCLUDED.last_updated,
-                        scraped_at=EXCLUDED.scraped_at
-                """, vals)
-            else:
-                cur.execute(f"""
-                    INSERT OR REPLACE INTO contributors (
-                        repo_full_name, rank, login, user_id, name, company, location,
-                        email, blog, twitter_username, hireable, bio,
-                        public_repos, public_gists, followers, following,
-                        total_commits, total_additions, total_deletions,
-                        net_lines, total_changes, avg_changes_per_commit,
-                        addition_deletion_ratio, contributions_on_default_branch,
-                        profile_url, avatar_url, account_created, last_updated, scraped_at
-                    ) VALUES ({placeholders})
-                """, vals)
+        if _use_postgres():
+            import psycopg2.extras
+            psycopg2.extras.execute_batch(cur, f"""
+                INSERT INTO contributors (
+                    repo_full_name, rank, login, user_id, name, company, location,
+                    email, blog, twitter_username, hireable, bio,
+                    public_repos, public_gists, followers, following,
+                    total_commits, total_additions, total_deletions,
+                    net_lines, total_changes, avg_changes_per_commit,
+                    addition_deletion_ratio, contributions_on_default_branch,
+                    profile_url, avatar_url, account_created, last_updated, scraped_at
+                ) VALUES ({placeholders})
+                ON CONFLICT (repo_full_name, login) DO UPDATE SET
+                    rank=EXCLUDED.rank, user_id=EXCLUDED.user_id, name=EXCLUDED.name,
+                    company=EXCLUDED.company, location=EXCLUDED.location, email=EXCLUDED.email,
+                    blog=EXCLUDED.blog, twitter_username=EXCLUDED.twitter_username,
+                    hireable=EXCLUDED.hireable, bio=EXCLUDED.bio,
+                    public_repos=EXCLUDED.public_repos, public_gists=EXCLUDED.public_gists,
+                    followers=EXCLUDED.followers, following=EXCLUDED.following,
+                    total_commits=EXCLUDED.total_commits, total_additions=EXCLUDED.total_additions,
+                    total_deletions=EXCLUDED.total_deletions, net_lines=EXCLUDED.net_lines,
+                    total_changes=EXCLUDED.total_changes,
+                    avg_changes_per_commit=EXCLUDED.avg_changes_per_commit,
+                    addition_deletion_ratio=EXCLUDED.addition_deletion_ratio,
+                    contributions_on_default_branch=EXCLUDED.contributions_on_default_branch,
+                    profile_url=EXCLUDED.profile_url, avatar_url=EXCLUDED.avatar_url,
+                    account_created=EXCLUDED.account_created, last_updated=EXCLUDED.last_updated,
+                    scraped_at=EXCLUDED.scraped_at
+            """, all_vals, page_size=200)
+        else:
+            cur.executemany(f"""
+                INSERT OR REPLACE INTO contributors (
+                    repo_full_name, rank, login, user_id, name, company, location,
+                    email, blog, twitter_username, hireable, bio,
+                    public_repos, public_gists, followers, following,
+                    total_commits, total_additions, total_deletions,
+                    net_lines, total_changes, avg_changes_per_commit,
+                    addition_deletion_ratio, contributions_on_default_branch,
+                    profile_url, avatar_url, account_created, last_updated, scraped_at
+                ) VALUES ({placeholders})
+            """, all_vals)
 
 
 def get_complete_profiles(repo_full_name: str) -> Dict[str, Dict]:
