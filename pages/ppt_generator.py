@@ -923,13 +923,51 @@ def build_batch_ppt(repos_data: list) -> io.BytesIO:
 
 
 # ════════════════════════════════════════════════════════════
+# 辅助函数（UI 层）
+# ════════════════════════════════════════════════════════════
+
+def _extract_region(loc: str) -> str:
+    parts = str(loc).split(",")
+    r = parts[-1].strip()
+    if re.match(r"^\d[\d\s\-]*$", r) or r == "":
+        r = parts[-2].strip() if len(parts) >= 2 else r
+    return r
+
+
+_MEDALS = {1: "🥇", 2: "🥈", 3: "🥉"}
+
+
+def _contrib_label(row: dict) -> str:
+    rank   = int(row.get("rank", 0)) if str(row.get("rank", "")).isdigit() else 0
+    prefix = _MEDALS.get(rank, f"#{row.get('rank', '?')}")
+    nm = f" ({row['name']})" if row.get("name") and str(row["name"]) not in ("None", "") else ""
+    co = (
+        f" · {str(row['company']).strip().lstrip('@')}"
+        if row.get("company") and str(row["company"]) not in ("None", "") else ""
+    )
+    return f"{prefix} @{row['login']}{nm}{co}"
+
+
+def _load_repo_df(repo: str) -> pd.DataFrame:
+    raw = get_contributors(repo)
+    if not raw:
+        return pd.DataFrame()
+    df = pd.DataFrame(raw)
+    for c in ["total_commits", "total_additions", "total_deletions",
+              "net_lines", "total_changes", "followers", "public_repos"]:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
+    return df
+
+
+# ════════════════════════════════════════════════════════════
 # Streamlit UI
 # ════════════════════════════════════════════════════════════
 
 st.title("📊 PPT 报告生成器")
 st.caption(
     "参考华为官方浅色版模板（白底 · 华为红 #C7000B），生成 16:9 分析报告 PPT。"
-    "包含封面、公司/地区概览，以及所选贡献者的详情页。"
+    "选择 1 个仓库生成单仓库 PPT；选择多个仓库生成合并 PPT。"
 )
 
 repos = list_repos()
@@ -937,183 +975,245 @@ if not repos:
     st.warning("数据库为空，请先在「数据采集」页面爬取至少一个仓库。")
     st.stop()
 
-tab_single, tab_batch = st.tabs(["单仓库", "批量生成"])
+all_repo_names = [r["full_name"] for r in repos]
+
+# ── 初始化 session state ──────────────────────────────────
+if "ppt_repos" not in st.session_state:
+    st.session_state["ppt_repos"] = []
+if "ppt_contribs" not in st.session_state:
+    st.session_state["ppt_contribs"] = {}  # {repo: [login, ...]}
 
 # ════════════════════════════════════════════════════════════
-# Tab 1：单仓库（现有功能不变）
+# Step 1：选择仓库（双栏）
 # ════════════════════════════════════════════════════════════
-with tab_single:
-    # ── 选择仓库 ──────────────────────────────────────────────
-    selected_repo = st.selectbox(
-        "选择仓库",
-        [r["full_name"] for r in repos],
-        format_func=lambda x: f"📦  {x}",
+
+st.subheader("① 选择仓库")
+
+col_repo_l, col_repo_r = st.columns(2)
+
+with col_repo_l:
+    st.markdown("**全部仓库**")
+    repo_search = st.text_input(
+        "搜索仓库", placeholder="输入关键词筛选...",
+        key="ppt_repo_search", label_visibility="collapsed",
     )
+    kw = repo_search.strip().lower()
+    visible_repos = [r for r in all_repo_names if kw in r.lower()] if kw else all_repo_names
 
-    raw = get_contributors(selected_repo)
-    if not raw:
-        st.error("该仓库暂无贡献者数据。")
-        st.stop()
+    for repo in visible_repos:
+        checked = st.checkbox(f"📦 {repo}", key=f"ppt_cb_{repo}")
+        if checked and repo not in st.session_state["ppt_repos"]:
+            st.session_state["ppt_repos"].append(repo)
+            if repo not in st.session_state["ppt_contribs"]:
+                st.session_state["ppt_contribs"][repo] = []
+        elif not checked and repo in st.session_state["ppt_repos"]:
+            st.session_state["ppt_repos"].remove(repo)
 
-    df = pd.DataFrame(raw)
-    for c in ["total_commits", "total_additions", "total_deletions",
-              "net_lines", "total_changes", "followers", "public_repos"]:
-        if c in df.columns:
-            df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
+with col_repo_r:
+    st.markdown("**已选仓库**")
+    if not st.session_state["ppt_repos"]:
+        st.caption("← 从左侧勾选仓库")
+    else:
+        for repo in list(st.session_state["ppt_repos"]):
+            rc1, rc2 = st.columns([6, 1])
+            with rc1:
+                n_c = len(st.session_state["ppt_contribs"].get(repo, []))
+                st.markdown(f"📦 `{repo}`" + (f"  · **{n_c} 人已选**" if n_c else ""))
+            with rc2:
+                if st.button("×", key=f"ppt_rm_repo_{repo}", help="移除该仓库"):
+                    st.session_state["ppt_repos"].remove(repo)
+                    st.session_state[f"ppt_cb_{repo}"] = False
+                    st.rerun()
 
+# ════════════════════════════════════════════════════════════
+# Step 2：筛选贡献者（每个仓库独立双栏）
+# ════════════════════════════════════════════════════════════
+
+if st.session_state["ppt_repos"]:
     st.markdown("---")
+    st.subheader("② 筛选贡献者")
+    st.caption("展开每个仓库，通过公司 / 地区筛选候选人，再移入已选栏。")
 
-    # ── 筛选面板 ──────────────────────────────────────────────
-    fc1, fc2 = st.columns(2)
+    for repo in st.session_state["ppt_repos"]:
+        if repo not in st.session_state["ppt_contribs"]:
+            st.session_state["ppt_contribs"][repo] = []
+        selected_logins: list = st.session_state["ppt_contribs"][repo]
+        n_sel = len(selected_logins)
 
-    with fc1:
-        cos = sorted(df["company"].dropna().str.strip().str.lstrip("@").unique().tolist())
-        filter_co = st.selectbox("按公司筛选", ["全部"] + cos)
+        with st.expander(f"📦 {repo}  —  已选 {n_sel} 人", expanded=(n_sel == 0)):
+            df_repo = _load_repo_df(repo)
+            if df_repo.empty:
+                st.warning("该仓库暂无贡献者数据。")
+                continue
 
-    with fc2:
-        def _region(loc):
-            parts = str(loc).split(",")
-            r = parts[-1].strip()
-            if re.match(r"^\d[\d\s\-]*$", r) or r == "":
-                r = parts[-2].strip() if len(parts) >= 2 else r
-            return r
-
-        all_regions = [r for r in sorted(df["location"].dropna().apply(_region).unique()) if r]
-        filter_rg = st.selectbox("按地区筛选", ["全部"] + all_regions)
-
-    filtered = df.copy()
-    if filter_co != "全部":
-        filtered = filtered[
-            filtered["company"].str.strip().str.lstrip("@") == filter_co
-        ]
-    if filter_rg != "全部":
-        filtered = filtered[filtered["location"].apply(_region) == filter_rg]
-
-    # ── 贡献者多选 ────────────────────────────────────────────
-    st.markdown(f"**符合条件的贡献者：{len(filtered)} 人** — 从下方勾选加入 PPT 详情页")
-
-    medals = {1: "🥇", 2: "🥈", 3: "🥉"}
-
-    def _label(r):
-        rank   = int(r.get("rank", 0))
-        prefix = medals.get(rank, f"#{rank}")
-        nm = f"  ({r['name']})" if r.get("name") and str(r["name"]) not in ("None", "") else ""
-        co = (
-            f"  ·  {str(r['company']).strip().lstrip('@')}"
-            if r.get("company") and str(r["company"]) not in ("None", "") else ""
-        )
-        return f"{prefix}  @{r['login']}{nm}{co}"
-
-    options = {_label(r): r["login"] for _, r in filtered.iterrows()}
-
-    selected_labels = st.multiselect(
-        "选择要在 PPT 中详细展示的贡献者（不限数量）",
-        list(options.keys()),
-        default=list(options.keys())[:min(10, len(options))],
-        help="所有选中贡献者均会出现在名片汇总页；同时每人生成一页详情页。人数较多时生成时间会略长。",
-    )
-    selected_logins = [options[lb] for lb in selected_labels]
-
-    n_summary = max(1, math.ceil(len(selected_logins) / _SUMMARY_PER_PAGE))
-    st.info(
-        f"PPT 将包含：**封面**（1页）+ **概览**（1页）"
-        f" + **名片汇总**（{n_summary}页）"
-        f" + **详情**（{len(selected_logins)}页）"
-        f" = 共 **{2 + n_summary + len(selected_logins)}** 页",
-        icon="📊",
-    )
-
-    st.markdown("---")
-
-    if st.button("🚀  生成 PPT", type="primary", disabled=len(selected_logins) == 0,
-                 key="btn_single"):
-        with st.spinner("正在生成 PPT，拉取头像约需几秒..."):
-            try:
-                ppt_buf = build_ppt(selected_repo, df, selected_logins)
-                fname = f"contributors_{selected_repo.replace('/', '_')}.pptx"
-                st.download_button(
-                    label="⬇️  点击下载 PPT（可直接用 Google Slides 打开）",
-                    data=ppt_buf,
-                    file_name=fname,
-                    mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                    type="primary",
-                    use_container_width=True,
+            # ── 筛选行 ──
+            f1, f2 = st.columns(2)
+            with f1:
+                cos = sorted(
+                    df_repo["company"].dropna().str.strip().str.lstrip("@").unique().tolist()
                 )
-                st.success(f"✅ PPT 生成成功！共 {2 + n_summary + len(selected_logins)} 页。")
-            except Exception as e:
-                st.error(f"生成失败：{e}")
-                st.code(traceback.format_exc())
+                filter_co = st.selectbox("公司筛选", ["全部"] + cos, key=f"ppt_co_{repo}")
+            with f2:
+                all_regions = sorted(
+                    {_extract_region(loc) for loc in df_repo["location"].dropna() if _extract_region(loc)}
+                )
+                filter_rg = st.selectbox("地区筛选", ["全部"] + all_regions, key=f"ppt_rg_{repo}")
+
+            # 应用筛选
+            df_f = df_repo.copy()
+            if filter_co != "全部":
+                df_f = df_f[df_f["company"].str.strip().str.lstrip("@") == filter_co]
+            if filter_rg != "全部":
+                df_f = df_f[df_f["location"].apply(_extract_region) == filter_rg]
+
+            # ── 双栏 ──
+            col_cand, col_sel = st.columns(2)
+
+            # 备选：已筛选 & 未加入已选
+            candidates = [
+                row for _, row in df_f.sort_values("rank").iterrows()
+                if row["login"] not in selected_logins
+            ]
+            cand_label_map = {_contrib_label(row): row["login"] for row in candidates}
+
+            # 把 label→login 映射存入 session_state，供 on_click 回调读取
+            st.session_state[f"ppt_cmap_{repo}"] = cand_label_map
+
+            # 回调工厂（用默认参数固定 repo 值，避免闭包捕获循环变量）
+            def _cb_add(r=repo):
+                cmap = st.session_state.get(f"ppt_cmap_{r}", {})
+                for lb in st.session_state.get(f"ppt_stage_{r}", []):
+                    login = cmap.get(lb)
+                    if login and login not in st.session_state["ppt_contribs"].get(r, []):
+                        st.session_state["ppt_contribs"][r].append(login)
+                st.session_state[f"ppt_stage_{r}"] = []
+
+            def _cb_addall(r=repo):
+                cmap = st.session_state.get(f"ppt_cmap_{r}", {})
+                for login in cmap.values():
+                    if login not in st.session_state["ppt_contribs"].get(r, []):
+                        st.session_state["ppt_contribs"][r].append(login)
+
+            with col_cand:
+                st.markdown(f"**备选贡献者**（{len(candidates)} 人）")
+                staged = st.multiselect(
+                    "选择要添加的贡献者",
+                    list(cand_label_map.keys()),
+                    key=f"ppt_stage_{repo}",
+                    label_visibility="collapsed",
+                )
+                btn1, btn2 = st.columns(2)
+                with btn1:
+                    st.button(
+                        "→ 添加已勾选", key=f"ppt_add_{repo}",
+                        disabled=not staged, use_container_width=True,
+                        on_click=_cb_add,
+                    )
+                with btn2:
+                    st.button(
+                        "→ 全部添加", key=f"ppt_addall_{repo}",
+                        disabled=not candidates, use_container_width=True,
+                        on_click=_cb_addall,
+                    )
+
+            with col_sel:
+                st.markdown(f"**已选贡献者**（{n_sel} 人）")
+                if not selected_logins:
+                    st.caption("从左侧添加贡献者")
+                else:
+                    login_to_row = {row["login"]: row for _, row in df_repo.iterrows()}
+                    for login in list(selected_logins):
+                        row = login_to_row.get(login, {"login": login, "rank": "?",
+                                                       "name": None, "company": None})
+                        sc1, sc2 = st.columns([5, 1])
+                        with sc1:
+                            rank = row.get("rank", "?")
+                            prefix = _MEDALS.get(
+                                int(rank) if str(rank).isdigit() else 0, f"#{rank}"
+                            )
+                            name = row.get("name") or ""
+                            nm_str = f" ({name})" if name and name != "None" else ""
+                            st.caption(f"{prefix} @{login}{nm_str}")
+                        with sc2:
+                            if st.button("×", key=f"ppt_rmc_{repo}_{login}"):
+                                st.session_state["ppt_contribs"][repo].remove(login)
+                                st.rerun()
+                    st.markdown("")
+                    if st.button("清空已选", key=f"ppt_clear_{repo}", use_container_width=True):
+                        st.session_state["ppt_contribs"][repo] = []
+                        st.rerun()
 
 # ════════════════════════════════════════════════════════════
-# Tab 2：批量生成
+# Step 3：生成 PPT
 # ════════════════════════════════════════════════════════════
-with tab_batch:
-    st.markdown("选择多个已采集的仓库，合并生成一份 PPTX（每个仓库有独立封面/概览/名片/详情段落）。")
+
+if st.session_state["ppt_repos"]:
     st.markdown("---")
+    st.subheader("③ 生成 PPT")
 
-    repo_names = [r["full_name"] for r in repos]
-    batch_selected_repos = st.multiselect(
-        "选择仓库（可多选）",
-        repo_names,
-        format_func=lambda x: f"📦  {x}",
-        help="已采集到数据库中的仓库",
-    )
+    # 统计各仓库已选人数 & 页数
+    repos_with_sel = [
+        r for r in st.session_state["ppt_repos"]
+        if st.session_state["ppt_contribs"].get(r)
+    ]
+    n_multi = len(st.session_state["ppt_repos"]) > 1
 
-    top_n = st.slider(
-        "每个仓库取前 N 名贡献者",
-        min_value=1, max_value=30, value=10,
-        help="每个仓库按贡献排名取前 N 名，进入名片汇总和详情页",
-    )
+    if not repos_with_sel:
+        st.info("请先在步骤 ② 中为至少一个仓库选择贡献者。", icon="💡")
+    else:
+        # 计算总页数
+        total_pages = 1 if n_multi else 0  # 多仓库时有总封面
+        previews = []
+        for repo in st.session_state["ppt_repos"]:
+            logins = st.session_state["ppt_contribs"].get(repo, [])
+            n_s = len(logins)
+            n_sum = max(1, math.ceil(n_s / _SUMMARY_PER_PAGE)) if n_s else 1
+            cnt = 1 + 1 + n_sum + n_s
+            if n_multi:
+                total_pages += cnt
+            else:
+                total_pages = cnt
+            if n_s:
+                previews.append(f"**{repo}**：{n_s} 人 → {cnt} 页")
 
-    if batch_selected_repos:
-        # 预览页数
-        total_batch_pages = 1  # 总封面
-        repo_previews = []
-        for rname in batch_selected_repos:
-            rraw = get_contributors(rname)
-            n_sel = min(top_n, len(rraw)) if rraw else 0
-            n_sum = max(1, math.ceil(n_sel / _SUMMARY_PER_PAGE)) if n_sel else 1
-            cnt   = 1 + 1 + n_sum + n_sel
-            total_batch_pages += cnt
-            repo_previews.append(f"**{rname}**：{n_sel} 人，{cnt} 页")
-        st.info(
-            "预计页数：" + "  |  ".join(repo_previews) +
-            f"  |  **总计 {total_batch_pages} 页**",
-            icon="📊",
-        )
+        st.info("  |  ".join(previews) + f"  |  **总计 {total_pages} 页**", icon="📊")
 
-    if st.button("🚀  生成合并 PPT", type="primary",
-                 disabled=(len(batch_selected_repos) == 0),
-                 key="btn_batch"):
-        with st.spinner("正在生成合并 PPT，拉取头像约需数秒..."):
-            try:
-                repos_data = []
-                for rname in batch_selected_repos:
-                    rraw = get_contributors(rname)
-                    if not rraw:
-                        st.warning(f"⚠️ {rname} 暂无数据，已跳过")
-                        continue
-                    rdf = pd.DataFrame(rraw)
-                    for c in ["total_commits", "total_additions", "total_deletions",
-                              "net_lines", "total_changes", "followers", "public_repos"]:
-                        if c in rdf.columns:
-                            rdf[c] = pd.to_numeric(rdf[c], errors="coerce").fillna(0)
-                    logins = rdf.sort_values("rank")["login"].head(top_n).tolist()
-                    repos_data.append({"repo": rname, "df": rdf, "logins": logins})
+        if st.button("🚀  生成 PPT", type="primary", key="ppt_gen_btn"):
+            with st.spinner("正在生成 PPT，拉取头像约需数秒..."):
+                try:
+                    repos_data = []
+                    for repo in st.session_state["ppt_repos"]:
+                        logins = st.session_state["ppt_contribs"].get(repo, [])
+                        if not logins:
+                            continue
+                        rdf = _load_repo_df(repo)
+                        if rdf.empty:
+                            st.warning(f"⚠️ {repo} 暂无数据，已跳过")
+                            continue
+                        repos_data.append({"repo": repo, "df": rdf, "logins": logins})
 
-                if repos_data:
-                    ppt_buf = build_batch_ppt(repos_data)
-                    repo_slug = "_".join(r["repo"].replace("/", "-") for r in repos_data[:3])
-                    fname = f"batch_contributors_{repo_slug}.pptx"
+                    if not repos_data:
+                        st.error("没有可用数据，请检查仓库。")
+                        st.stop()
+
+                    if len(repos_data) == 1:
+                        item = repos_data[0]
+                        ppt_buf = build_ppt(item["repo"], item["df"], item["logins"])
+                        fname = f"contributors_{item['repo'].replace('/', '_')}.pptx"
+                    else:
+                        ppt_buf = build_batch_ppt(repos_data)
+                        slug = "_".join(r["repo"].replace("/", "-") for r in repos_data[:3])
+                        fname = f"batch_contributors_{slug}.pptx"
+
                     st.download_button(
-                        label="⬇️  点击下载合并 PPT（可直接用 Google Slides 打开）",
+                        label="⬇️  点击下载 PPT（可直接用 Google Slides 打开）",
                         data=ppt_buf,
                         file_name=fname,
                         mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
                         type="primary",
                         use_container_width=True,
                     )
-                    st.success(f"✅ 合并 PPT 生成成功！共 {len(repos_data)} 个仓库。")
-            except Exception as e:
-                st.error(f"生成失败：{e}")
-                st.code(traceback.format_exc())
+                    st.success(f"✅ PPT 生成成功！共 {total_pages} 页。")
+                except Exception as e:
+                    st.error(f"生成失败：{e}")
+                    st.code(traceback.format_exc())
