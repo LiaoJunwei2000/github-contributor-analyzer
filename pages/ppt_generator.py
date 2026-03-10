@@ -1023,8 +1023,6 @@ with col_repo_l:
             st.session_state[f"ppt_cb_{r}"] = True
             if r not in st.session_state["ppt_repos"]:
                 st.session_state["ppt_repos"].append(r)
-            if r not in st.session_state["ppt_contribs"]:
-                st.session_state["ppt_contribs"][r] = []
 
     def _deselect_all_visible(vlist=None):
         for r in (vlist or []):
@@ -1064,8 +1062,6 @@ with col_repo_l:
         checked = st.checkbox(f"📦 {repo}", key=f"ppt_cb_{repo}")
         if checked and repo not in st.session_state["ppt_repos"]:
             st.session_state["ppt_repos"].append(repo)
-            if repo not in st.session_state["ppt_contribs"]:
-                st.session_state["ppt_contribs"][repo] = []
         elif not checked and repo in st.session_state["ppt_repos"]:
             st.session_state["ppt_repos"].remove(repo)
         badges_html = _tag_badges_html(repo)
@@ -1083,8 +1079,7 @@ with col_repo_r:
         for repo in list(st.session_state["ppt_repos"]):
             rc1, rc2 = st.columns([6, 1])
             with rc1:
-                n_c = len(st.session_state["ppt_contribs"].get(repo, []))
-                st.markdown(f"📦 `{repo}`" + (f"  · **{n_c} 人已选**" if n_c else ""))
+                st.markdown(f"📦 `{repo}`")
                 badges_html = _tag_badges_html(repo)
                 if badges_html:
                     st.markdown(badges_html, unsafe_allow_html=True)
