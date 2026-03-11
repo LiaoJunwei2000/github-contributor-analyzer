@@ -42,8 +42,22 @@ manual = st.Page(
     title="使用手册",
     icon="📖",
 )
+hf_scraper = st.Page(
+    "pages/hf_scraper.py",
+    title="HF 采集",
+    icon="🤗",
+)
+hf_history = st.Page(
+    "pages/hf_history.py",
+    title="HF 历史",
+    icon="🗂️",
+)
 
-pg = st.navigation([scraper, batch, history, ppt, tags, manual])
+pg = st.navigation({
+    "🐙 GitHub": [scraper, batch, history, ppt, tags],
+    "🤗 Hugging Face": [hf_scraper, hf_history],
+    "其他": [manual],
+})
 
 # ── 移动端响应式 CSS ──
 st.markdown("""
