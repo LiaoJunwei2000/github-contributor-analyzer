@@ -12,11 +12,12 @@ _jobs: Dict[str, Dict[str, Any]] = {}
 _lock = threading.Lock()
 
 
-def create_job(repo: str) -> str:
+def create_job(repo: str, job_type: str = "proj") -> str:
     job_id = uuid.uuid4().hex[:8]
     with _lock:
         _jobs[job_id] = {
             "repo": repo,
+            "job_type": job_type,   # "proj" | "org"
             "status": "running",    # running | complete | error
             "phase": "starting",    # starting | repo_info | contributors | stats | merging | enriching | saving
             "done": 0,
@@ -26,6 +27,7 @@ def create_job(repo: str) -> str:
             "rl_status": "normal",
             "rl_remaining": 5000,
             "rl_wait_s": 0,
+            "rl_wait_until": 0.0,
             "details": None,
             "error": None,
         }
@@ -51,6 +53,20 @@ def get_active_job_for_repo(repo: str) -> Optional[str]:
             if j["repo"] == repo and j["status"] == "running":
                 return jid
     return None
+
+
+def list_running_jobs(job_type: Optional[str] = None) -> list:
+    """
+    返回所有运行中任务的 job_id 列表。
+    job_type 为 None 时返回全部，否则按 job_type 过滤（"proj" | "org"）。
+    用于页面刷新后自动恢复进度显示。
+    """
+    with _lock:
+        return [
+            jid for jid, j in _jobs.items()
+            if j["status"] == "running"
+            and (job_type is None or j.get("job_type") == job_type)
+        ]
 
 
 def finish_job(job_id: str, error: str = None):

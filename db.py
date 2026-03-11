@@ -92,10 +92,151 @@ def init_db():
         _init_postgres()
     else:
         _init_sqlite()
+    _migrate_hf_tables()
+
+
+def _migrate_hf_tables():
+    """为已有数据库的 hf_contributors / hf_org_members 表追加新列（幂等）。"""
+    new_cols = [
+        ("linkedin_url",     "TEXT"),
+        ("scholar_url",      "TEXT"),
+        ("affiliation_type", "TEXT"),
+        ("employer",         "TEXT"),
+        ("num_discussions",  "INTEGER DEFAULT 0"),
+        ("num_papers",       "INTEGER DEFAULT 0"),
+        ("num_upvotes",      "INTEGER DEFAULT 0"),
+        ("num_likes",        "INTEGER DEFAULT 0"),
+        ("twitter_url",      "TEXT"),
+        ("github_url",       "TEXT"),
+        ("bluesky_url",      "TEXT"),
+    ]
+    tables = ["hf_contributors", "hf_org_members"]
+    with _get_cursor() as cur:
+        for table in tables:
+            for col, col_type in new_cols:
+                try:
+                    if _use_postgres():
+                        cur.execute(
+                            f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {col} {col_type}"
+                        )
+                    else:
+                        cur.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_type}")
+                except Exception:
+                    pass  # 列已存在时 SQLite 会报错，忽略即可
 
 
 def _init_postgres():
     with _pg_cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS hf_orgs (
+                id           SERIAL PRIMARY KEY,
+                name         TEXT UNIQUE NOT NULL,
+                fullname     TEXT,
+                avatar_url   TEXT,
+                is_verified  INTEGER DEFAULT 0,
+                num_members  INTEGER DEFAULT 0,
+                num_models   INTEGER DEFAULT 0,
+                num_datasets INTEGER DEFAULT 0,
+                num_spaces   INTEGER DEFAULT 0,
+                num_papers   INTEGER DEFAULT 0,
+                num_followers INTEGER DEFAULT 0,
+                scraped_at   TEXT
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS hf_org_members (
+                id               SERIAL PRIMARY KEY,
+                org_name         TEXT NOT NULL,
+                username         TEXT NOT NULL,
+                fullname         TEXT,
+                member_type      TEXT,
+                is_pro           INTEGER DEFAULT 0,
+                avatar_url       TEXT,
+                bio              TEXT,
+                location         TEXT,
+                website          TEXT,
+                num_followers    INTEGER DEFAULT 0,
+                num_following    INTEGER DEFAULT 0,
+                num_models       INTEGER DEFAULT 0,
+                num_datasets     INTEGER DEFAULT 0,
+                num_spaces       INTEGER DEFAULT 0,
+                orgs             TEXT,
+                profile_url      TEXT,
+                account_created  TEXT,
+                scraped_at       TEXT,
+                linkedin_url     TEXT,
+                scholar_url      TEXT,
+                affiliation_type TEXT,
+                employer         TEXT,
+                num_discussions  INTEGER DEFAULT 0,
+                num_papers       INTEGER DEFAULT 0,
+                num_upvotes      INTEGER DEFAULT 0,
+                num_likes        INTEGER DEFAULT 0,
+                twitter_url      TEXT,
+                github_url       TEXT,
+                bluesky_url      TEXT,
+                UNIQUE(org_name, username)
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS hf_repos (
+                id            SERIAL PRIMARY KEY,
+                full_name     TEXT UNIQUE NOT NULL,
+                hf_type       TEXT NOT NULL,
+                description   TEXT,
+                author        TEXT,
+                likes         INTEGER DEFAULT 0,
+                downloads     INTEGER DEFAULT 0,
+                pipeline_tag  TEXT,
+                library_name  TEXT,
+                tags          TEXT,
+                license       TEXT,
+                gated         TEXT,
+                created_at    TEXT,
+                last_modified TEXT,
+                sha           TEXT,
+                scraped_at    TEXT
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS hf_contributors (
+                id               SERIAL PRIMARY KEY,
+                repo_full_name   TEXT NOT NULL,
+                hf_type          TEXT NOT NULL,
+                rank             INTEGER,
+                username         TEXT NOT NULL,
+                fullname         TEXT,
+                bio              TEXT,
+                location         TEXT,
+                website          TEXT,
+                avatar_url       TEXT,
+                is_pro           INTEGER DEFAULT 0,
+                num_followers    INTEGER DEFAULT 0,
+                num_following    INTEGER DEFAULT 0,
+                num_models       INTEGER DEFAULT 0,
+                num_datasets     INTEGER DEFAULT 0,
+                num_spaces       INTEGER DEFAULT 0,
+                orgs             TEXT,
+                total_commits    INTEGER DEFAULT 0,
+                first_commit_at  TEXT,
+                last_commit_at   TEXT,
+                profile_url      TEXT,
+                account_created  TEXT,
+                scraped_at       TEXT,
+                linkedin_url     TEXT,
+                scholar_url      TEXT,
+                affiliation_type TEXT,
+                employer         TEXT,
+                num_discussions  INTEGER DEFAULT 0,
+                num_papers       INTEGER DEFAULT 0,
+                num_upvotes      INTEGER DEFAULT 0,
+                num_likes        INTEGER DEFAULT 0,
+                twitter_url      TEXT,
+                github_url       TEXT,
+                bluesky_url      TEXT,
+                UNIQUE(repo_full_name, username)
+            )
+        """)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS tags (
                 id    SERIAL PRIMARY KEY,
@@ -162,6 +303,108 @@ def _init_postgres():
 def _init_sqlite():
     with _sqlite_cursor() as cur:
         cur.executescript("""
+            CREATE TABLE IF NOT EXISTS hf_orgs (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                name          TEXT UNIQUE NOT NULL,
+                fullname      TEXT,
+                avatar_url    TEXT,
+                is_verified   INTEGER DEFAULT 0,
+                num_members   INTEGER DEFAULT 0,
+                num_models    INTEGER DEFAULT 0,
+                num_datasets  INTEGER DEFAULT 0,
+                num_spaces    INTEGER DEFAULT 0,
+                num_papers    INTEGER DEFAULT 0,
+                num_followers INTEGER DEFAULT 0,
+                scraped_at    TEXT
+            );
+            CREATE TABLE IF NOT EXISTS hf_org_members (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                org_name         TEXT NOT NULL,
+                username         TEXT NOT NULL,
+                fullname         TEXT,
+                member_type      TEXT,
+                is_pro           INTEGER DEFAULT 0,
+                avatar_url       TEXT,
+                bio              TEXT,
+                location         TEXT,
+                website          TEXT,
+                num_followers    INTEGER DEFAULT 0,
+                num_following    INTEGER DEFAULT 0,
+                num_models       INTEGER DEFAULT 0,
+                num_datasets     INTEGER DEFAULT 0,
+                num_spaces       INTEGER DEFAULT 0,
+                orgs             TEXT,
+                profile_url      TEXT,
+                account_created  TEXT,
+                scraped_at       TEXT,
+                linkedin_url     TEXT,
+                scholar_url      TEXT,
+                affiliation_type TEXT,
+                employer         TEXT,
+                num_discussions  INTEGER DEFAULT 0,
+                num_papers       INTEGER DEFAULT 0,
+                num_upvotes      INTEGER DEFAULT 0,
+                num_likes        INTEGER DEFAULT 0,
+                twitter_url      TEXT,
+                github_url       TEXT,
+                bluesky_url      TEXT,
+                UNIQUE(org_name, username)
+            );
+            CREATE TABLE IF NOT EXISTS hf_repos (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                full_name     TEXT UNIQUE NOT NULL,
+                hf_type       TEXT NOT NULL,
+                description   TEXT,
+                author        TEXT,
+                likes         INTEGER DEFAULT 0,
+                downloads     INTEGER DEFAULT 0,
+                pipeline_tag  TEXT,
+                library_name  TEXT,
+                tags          TEXT,
+                license       TEXT,
+                gated         TEXT,
+                created_at    TEXT,
+                last_modified TEXT,
+                sha           TEXT,
+                scraped_at    TEXT
+            );
+            CREATE TABLE IF NOT EXISTS hf_contributors (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                repo_full_name   TEXT NOT NULL,
+                hf_type          TEXT NOT NULL,
+                rank             INTEGER,
+                username         TEXT NOT NULL,
+                fullname         TEXT,
+                bio              TEXT,
+                location         TEXT,
+                website          TEXT,
+                avatar_url       TEXT,
+                is_pro           INTEGER DEFAULT 0,
+                num_followers    INTEGER DEFAULT 0,
+                num_following    INTEGER DEFAULT 0,
+                num_models       INTEGER DEFAULT 0,
+                num_datasets     INTEGER DEFAULT 0,
+                num_spaces       INTEGER DEFAULT 0,
+                orgs             TEXT,
+                total_commits    INTEGER DEFAULT 0,
+                first_commit_at  TEXT,
+                last_commit_at   TEXT,
+                profile_url      TEXT,
+                account_created  TEXT,
+                scraped_at       TEXT,
+                linkedin_url     TEXT,
+                scholar_url      TEXT,
+                affiliation_type TEXT,
+                employer         TEXT,
+                num_discussions  INTEGER DEFAULT 0,
+                num_papers       INTEGER DEFAULT 0,
+                num_upvotes      INTEGER DEFAULT 0,
+                num_likes        INTEGER DEFAULT 0,
+                twitter_url      TEXT,
+                github_url       TEXT,
+                bluesky_url      TEXT,
+                UNIQUE(repo_full_name, username)
+            );
             CREATE TABLE IF NOT EXISTS tags (
                 id    INTEGER PRIMARY KEY AUTOINCREMENT,
                 name  TEXT UNIQUE NOT NULL,
@@ -473,3 +716,331 @@ def get_repos_by_tags(tag_ids: List[int]) -> List[str]:
             tag_ids,
         )
         return [r["repo_full_name"] for r in cur.fetchall()]
+
+
+# ── HF CRUD ────────────────────────────────────────────────────
+
+def save_hf_repo(details: Dict[str, Any]):
+    """Upsert 一条 HF 项目记录。"""
+    import json
+    p = _ph()
+    tags_json = json.dumps(details.get("tags") or [], ensure_ascii=False)
+    vals = (
+        details.get("full_name"),
+        details.get("hf_type"),
+        details.get("description"),
+        details.get("author"),
+        details.get("likes", 0),
+        details.get("downloads", 0),
+        details.get("pipeline_tag"),
+        details.get("library_name"),
+        tags_json,
+        details.get("license"),
+        str(details.get("gated", "false")),
+        details.get("created_at"),
+        details.get("last_modified"),
+        details.get("sha"),
+        _now(),
+    )
+    with _get_cursor() as cur:
+        if _use_postgres():
+            cur.execute(f"""
+                INSERT INTO hf_repos
+                    (full_name, hf_type, description, author, likes, downloads,
+                     pipeline_tag, library_name, tags, license, gated,
+                     created_at, last_modified, sha, scraped_at)
+                VALUES ({p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p})
+                ON CONFLICT (full_name) DO UPDATE SET
+                    hf_type=EXCLUDED.hf_type, description=EXCLUDED.description,
+                    author=EXCLUDED.author, likes=EXCLUDED.likes,
+                    downloads=EXCLUDED.downloads, pipeline_tag=EXCLUDED.pipeline_tag,
+                    library_name=EXCLUDED.library_name, tags=EXCLUDED.tags,
+                    license=EXCLUDED.license, gated=EXCLUDED.gated,
+                    created_at=EXCLUDED.created_at, last_modified=EXCLUDED.last_modified,
+                    sha=EXCLUDED.sha, scraped_at=EXCLUDED.scraped_at
+            """, vals)
+        else:
+            cur.execute(f"""
+                INSERT OR REPLACE INTO hf_repos
+                    (full_name, hf_type, description, author, likes, downloads,
+                     pipeline_tag, library_name, tags, license, gated,
+                     created_at, last_modified, sha, scraped_at)
+                VALUES ({p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p})
+            """, vals)
+
+
+def save_hf_contributors(repo_full_name: str, hf_type: str, contributors: List[Dict[str, Any]]):
+    """批量 Upsert HF 贡献者记录。"""
+    if not contributors:
+        return
+    import json
+    p = _ph()
+    placeholders = ",".join([p] * 33)
+    now = _now()
+    all_vals = [
+        (
+            repo_full_name, hf_type,
+            c.get("rank"), c.get("username"), c.get("fullname"),
+            c.get("bio"), c.get("location"), c.get("website"), c.get("avatar_url"),
+            1 if c.get("is_pro") else 0,
+            c.get("num_followers", 0), c.get("num_following", 0),
+            c.get("num_models", 0), c.get("num_datasets", 0), c.get("num_spaces", 0),
+            json.dumps(c.get("orgs") or [], ensure_ascii=False),
+            c.get("total_commits", 0), c.get("first_commit_at"), c.get("last_commit_at"),
+            c.get("profile_url"), c.get("account_created"), now,
+            c.get("linkedin_url"), c.get("scholar_url"),
+            c.get("affiliation_type"), c.get("employer"),
+            c.get("num_discussions", 0) or 0, c.get("num_papers", 0) or 0,
+            c.get("num_upvotes", 0) or 0, c.get("num_likes", 0) or 0,
+            c.get("twitter_url"), c.get("github_url"), c.get("bluesky_url"),
+        )
+        for c in contributors
+    ]
+    with _get_cursor() as cur:
+        if _use_postgres():
+            import psycopg2.extras
+            psycopg2.extras.execute_batch(cur, f"""
+                INSERT INTO hf_contributors (
+                    repo_full_name, hf_type, rank, username, fullname,
+                    bio, location, website, avatar_url, is_pro,
+                    num_followers, num_following, num_models, num_datasets, num_spaces,
+                    orgs, total_commits, first_commit_at, last_commit_at,
+                    profile_url, account_created, scraped_at,
+                    linkedin_url, scholar_url, affiliation_type, employer,
+                    num_discussions, num_papers, num_upvotes, num_likes,
+                    twitter_url, github_url, bluesky_url
+                ) VALUES ({placeholders})
+                ON CONFLICT (repo_full_name, username) DO UPDATE SET
+                    hf_type=EXCLUDED.hf_type, rank=EXCLUDED.rank,
+                    fullname=EXCLUDED.fullname, bio=EXCLUDED.bio,
+                    location=EXCLUDED.location, website=EXCLUDED.website,
+                    avatar_url=EXCLUDED.avatar_url, is_pro=EXCLUDED.is_pro,
+                    num_followers=EXCLUDED.num_followers, num_following=EXCLUDED.num_following,
+                    num_models=EXCLUDED.num_models, num_datasets=EXCLUDED.num_datasets,
+                    num_spaces=EXCLUDED.num_spaces, orgs=EXCLUDED.orgs,
+                    total_commits=EXCLUDED.total_commits,
+                    first_commit_at=EXCLUDED.first_commit_at,
+                    last_commit_at=EXCLUDED.last_commit_at,
+                    profile_url=EXCLUDED.profile_url,
+                    account_created=EXCLUDED.account_created,
+                    scraped_at=EXCLUDED.scraped_at,
+                    linkedin_url=EXCLUDED.linkedin_url,
+                    scholar_url=EXCLUDED.scholar_url,
+                    affiliation_type=EXCLUDED.affiliation_type,
+                    employer=EXCLUDED.employer,
+                    num_discussions=EXCLUDED.num_discussions,
+                    num_papers=EXCLUDED.num_papers,
+                    num_upvotes=EXCLUDED.num_upvotes,
+                    num_likes=EXCLUDED.num_likes,
+                    twitter_url=EXCLUDED.twitter_url,
+                    github_url=EXCLUDED.github_url,
+                    bluesky_url=EXCLUDED.bluesky_url
+            """, all_vals, page_size=200)
+        else:
+            cur.executemany(f"""
+                INSERT OR REPLACE INTO hf_contributors (
+                    repo_full_name, hf_type, rank, username, fullname,
+                    bio, location, website, avatar_url, is_pro,
+                    num_followers, num_following, num_models, num_datasets, num_spaces,
+                    orgs, total_commits, first_commit_at, last_commit_at,
+                    profile_url, account_created, scraped_at,
+                    linkedin_url, scholar_url, affiliation_type, employer,
+                    num_discussions, num_papers, num_upvotes, num_likes,
+                    twitter_url, github_url, bluesky_url
+                ) VALUES ({placeholders})
+            """, all_vals)
+
+
+def get_hf_contributors(repo_full_name: str) -> List[Dict]:
+    """返回该 HF 项目的贡献者列表，按 rank 升序。"""
+    p = _ph()
+    with _get_cursor() as cur:
+        cur.execute(
+            f"SELECT * FROM hf_contributors WHERE repo_full_name = {p} ORDER BY rank ASC",
+            (repo_full_name,),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
+def list_hf_repos() -> List[Dict]:
+    """返回所有 HF 项目，按采集时间倒序。"""
+    with _get_cursor() as cur:
+        cur.execute("SELECT * FROM hf_repos ORDER BY scraped_at DESC")
+        return [dict(r) for r in cur.fetchall()]
+
+
+def delete_hf_repo(repo_full_name: str):
+    """删除 HF 项目及其所有贡献者记录。"""
+    p = _ph()
+    with _get_cursor() as cur:
+        cur.execute(f"DELETE FROM hf_contributors WHERE repo_full_name = {p}", (repo_full_name,))
+        cur.execute(f"DELETE FROM hf_repos WHERE full_name = {p}", (repo_full_name,))
+
+
+def get_hf_complete_profiles(repo_full_name: str) -> Dict[str, Dict]:
+    """返回已有完整 Profile 的贡献者（num_followers 不为 null），用于续传跳过。"""
+    p = _ph()
+    with _get_cursor() as cur:
+        cur.execute(
+            f"SELECT * FROM hf_contributors WHERE repo_full_name = {p} AND num_followers IS NOT NULL",
+            (repo_full_name,),
+        )
+        return {row["username"]: dict(row) for row in cur.fetchall()}
+
+
+# ── HF Org CRUD ──────────────────────────────────────────────────
+
+def save_hf_org(overview: Dict[str, Any]):
+    p = _ph()
+    vals = (
+        overview.get("name"),
+        overview.get("fullname"),
+        overview.get("avatar_url"),
+        1 if overview.get("is_verified") else 0,
+        overview.get("num_members", 0),
+        overview.get("num_models", 0),
+        overview.get("num_datasets", 0),
+        overview.get("num_spaces", 0),
+        overview.get("num_papers", 0),
+        overview.get("num_followers", 0),
+        _now(),
+    )
+    with _get_cursor() as cur:
+        if _use_postgres():
+            cur.execute(f"""
+                INSERT INTO hf_orgs
+                    (name, fullname, avatar_url, is_verified, num_members,
+                     num_models, num_datasets, num_spaces, num_papers, num_followers, scraped_at)
+                VALUES ({p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p})
+                ON CONFLICT (name) DO UPDATE SET
+                    fullname=EXCLUDED.fullname, avatar_url=EXCLUDED.avatar_url,
+                    is_verified=EXCLUDED.is_verified, num_members=EXCLUDED.num_members,
+                    num_models=EXCLUDED.num_models, num_datasets=EXCLUDED.num_datasets,
+                    num_spaces=EXCLUDED.num_spaces, num_papers=EXCLUDED.num_papers,
+                    num_followers=EXCLUDED.num_followers, scraped_at=EXCLUDED.scraped_at
+            """, vals)
+        else:
+            cur.execute(f"""
+                INSERT OR REPLACE INTO hf_orgs
+                    (name, fullname, avatar_url, is_verified, num_members,
+                     num_models, num_datasets, num_spaces, num_papers, num_followers, scraped_at)
+                VALUES ({p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p})
+            """, vals)
+
+
+def save_hf_org_members(org_name: str, members: List[Dict[str, Any]]):
+    if not members:
+        return
+    import json
+    p = _ph()
+    placeholders = ",".join([p] * 29)
+    now = _now()
+    all_vals = [
+        (
+            org_name,
+            m.get("username"),
+            m.get("fullname"),
+            m.get("member_type"),
+            1 if m.get("is_pro") else 0,
+            m.get("avatar_url"),
+            m.get("bio"),
+            m.get("location"),
+            m.get("website"),
+            m.get("num_followers", 0),
+            m.get("num_following", 0),
+            m.get("num_models", 0),
+            m.get("num_datasets", 0),
+            m.get("num_spaces", 0),
+            json.dumps(m.get("orgs") or [], ensure_ascii=False),
+            m.get("profile_url"),
+            m.get("account_created"),
+            now,
+            m.get("linkedin_url"),
+            m.get("scholar_url"),
+            m.get("affiliation_type"),
+            m.get("employer"),
+            m.get("num_discussions", 0) or 0,
+            m.get("num_papers", 0) or 0,
+            m.get("num_upvotes", 0) or 0,
+            m.get("num_likes", 0) or 0,
+            m.get("twitter_url"),
+            m.get("github_url"),
+            m.get("bluesky_url"),
+        )
+        for m in members
+    ]
+    with _get_cursor() as cur:
+        if _use_postgres():
+            import psycopg2.extras
+            psycopg2.extras.execute_batch(cur, f"""
+                INSERT INTO hf_org_members
+                    (org_name, username, fullname, member_type, is_pro, avatar_url,
+                     bio, location, website, num_followers, num_following,
+                     num_models, num_datasets, num_spaces, orgs,
+                     profile_url, account_created, scraped_at,
+                     linkedin_url, scholar_url, affiliation_type, employer,
+                     num_discussions, num_papers, num_upvotes, num_likes,
+                     twitter_url, github_url, bluesky_url)
+                VALUES ({placeholders})
+                ON CONFLICT (org_name, username) DO UPDATE SET
+                    fullname=EXCLUDED.fullname, member_type=EXCLUDED.member_type,
+                    is_pro=EXCLUDED.is_pro, avatar_url=EXCLUDED.avatar_url,
+                    bio=EXCLUDED.bio, location=EXCLUDED.location, website=EXCLUDED.website,
+                    num_followers=EXCLUDED.num_followers, num_following=EXCLUDED.num_following,
+                    num_models=EXCLUDED.num_models, num_datasets=EXCLUDED.num_datasets,
+                    num_spaces=EXCLUDED.num_spaces, orgs=EXCLUDED.orgs,
+                    profile_url=EXCLUDED.profile_url, account_created=EXCLUDED.account_created,
+                    scraped_at=EXCLUDED.scraped_at,
+                    linkedin_url=EXCLUDED.linkedin_url, scholar_url=EXCLUDED.scholar_url,
+                    affiliation_type=EXCLUDED.affiliation_type, employer=EXCLUDED.employer,
+                    num_discussions=EXCLUDED.num_discussions, num_papers=EXCLUDED.num_papers,
+                    num_upvotes=EXCLUDED.num_upvotes, num_likes=EXCLUDED.num_likes,
+                    twitter_url=EXCLUDED.twitter_url, github_url=EXCLUDED.github_url,
+                    bluesky_url=EXCLUDED.bluesky_url
+            """, all_vals, page_size=200)
+        else:
+            cur.executemany(f"""
+                INSERT OR REPLACE INTO hf_org_members
+                    (org_name, username, fullname, member_type, is_pro, avatar_url,
+                     bio, location, website, num_followers, num_following,
+                     num_models, num_datasets, num_spaces, orgs,
+                     profile_url, account_created, scraped_at,
+                     linkedin_url, scholar_url, affiliation_type, employer,
+                     num_discussions, num_papers, num_upvotes, num_likes,
+                     twitter_url, github_url, bluesky_url)
+                VALUES ({placeholders})
+            """, all_vals)
+
+
+def get_hf_org_members(org_name: str) -> List[Dict]:
+    p = _ph()
+    with _get_cursor() as cur:
+        cur.execute(
+            f"SELECT * FROM hf_org_members WHERE org_name = {p} ORDER BY num_followers DESC",
+            (org_name,),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
+def list_hf_orgs() -> List[Dict]:
+    with _get_cursor() as cur:
+        cur.execute("SELECT * FROM hf_orgs ORDER BY scraped_at DESC")
+        return [dict(r) for r in cur.fetchall()]
+
+
+def delete_hf_org(org_name: str):
+    p = _ph()
+    with _get_cursor() as cur:
+        cur.execute(f"DELETE FROM hf_org_members WHERE org_name = {p}", (org_name,))
+        cur.execute(f"DELETE FROM hf_orgs WHERE name = {p}", (org_name,))
+
+
+def get_hf_org_complete_profiles(org_name: str) -> Dict[str, Dict]:
+    """返回已有完整 Profile 的成员，用于续传跳过。"""
+    p = _ph()
+    with _get_cursor() as cur:
+        cur.execute(
+            f"SELECT * FROM hf_org_members WHERE org_name = {p} AND num_followers IS NOT NULL",
+            (org_name,),
+        )
+        return {row["username"]: dict(row) for row in cur.fetchall()}
