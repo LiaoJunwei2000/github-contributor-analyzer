@@ -61,16 +61,88 @@ from pptx.enum.text import PP_ALIGN
 
 from db import list_repos, get_contributors, list_tags, get_repos_by_tags, get_all_repo_tags
 
-# ── 华为浅色版配色 ────────────────────────────────────────────
-C_RED    = RGBColor(0xC7, 0x00, 0x0B)   # 华为红（主色）
-C_DRED   = RGBColor(0xA3, 0x00, 0x09)   # 深红（强调/hover）
-C_DARKRED= RGBColor(0x6B, 0x00, 0x04)   # 暗红（替代深蓝，封面/对比色）
-C_DGRAY  = RGBColor(0x33, 0x33, 0x33)   # 主文字
-C_MGRAY  = RGBColor(0x6B, 0x6B, 0x6B)   # 辅助文字
-C_LGRAY  = RGBColor(0xF5, 0xF5, 0xF5)   # 卡片/区块底
-C_BORDER = RGBColor(0xE0, 0xE0, 0xE0)   # 细线/边框
+# ── 主题系统 ─────────────────────────────────────────────────
+# 每个主题包含 7 个颜色槽，对应全局 C_* 变量
+# primary / primary_mid / bg_panel / text_main / text_sub / bg_card / border
+THEMES = {
+    "华为经典": {
+        "primary":    (0xC7, 0x00, 0x0B),
+        "primary_mid":(0xA3, 0x00, 0x09),
+        "bg_panel":   (0x6B, 0x00, 0x04),
+        "text_main":  (0x33, 0x33, 0x33),
+        "text_sub":   (0x6B, 0x6B, 0x6B),
+        "bg_card":    (0xF5, 0xF5, 0xF5),
+        "border":     (0xE0, 0xE0, 0xE0),
+        "swatch":     "#C7000B",
+    },
+    "深海蓝": {
+        "primary":    (0x1A, 0x56, 0xAB),
+        "primary_mid":(0x2E, 0x6D, 0xCF),
+        "bg_panel":   (0x0D, 0x2E, 0x5E),
+        "text_main":  (0x1A, 0x24, 0x3A),
+        "text_sub":   (0x55, 0x68, 0x84),
+        "bg_card":    (0xF0, 0xF5, 0xFF),
+        "border":     (0xC8, 0xD8, 0xF0),
+        "swatch":     "#1A56AB",
+    },
+    "森林绿": {
+        "primary":    (0x1E, 0x7A, 0x4E),
+        "primary_mid":(0x2D, 0xA0, 0x69),
+        "bg_panel":   (0x0D, 0x3D, 0x27),
+        "text_main":  (0x1A, 0x2E, 0x22),
+        "text_sub":   (0x52, 0x73, 0x5E),
+        "bg_card":    (0xF0, 0xFA, 0xF4),
+        "border":     (0xC2, 0xE5, 0xD0),
+        "swatch":     "#1E7A4E",
+    },
+    "暮光紫": {
+        "primary":    (0x6B, 0x3F, 0xA0),
+        "primary_mid":(0x8B, 0x5C, 0xC8),
+        "bg_panel":   (0x35, 0x1A, 0x55),
+        "text_main":  (0x22, 0x1A, 0x33),
+        "text_sub":   (0x6A, 0x57, 0x84),
+        "bg_card":    (0xF8, 0xF3, 0xFF),
+        "border":     (0xD9, 0xC8, 0xF0),
+        "swatch":     "#6B3FA0",
+    },
+    "极简灰": {
+        "primary":    (0x2D, 0x3A, 0x4A),
+        "primary_mid":(0x4A, 0x5C, 0x72),
+        "bg_panel":   (0x16, 0x1C, 0x25),
+        "text_main":  (0x1A, 0x1A, 0x1A),
+        "text_sub":   (0x66, 0x66, 0x66),
+        "bg_card":    (0xF4, 0xF5, 0xF6),
+        "border":     (0xD8, 0xDA, 0xDE),
+        "swatch":     "#2D3A4A",
+    },
+}
+
+# ── 当前活跃颜色（由 _apply_theme() 写入）─────────────────────
+C_RED    = RGBColor(0xC7, 0x00, 0x0B)
+C_DRED   = RGBColor(0xA3, 0x00, 0x09)
+C_DARKRED= RGBColor(0x6B, 0x00, 0x04)
+C_DGRAY  = RGBColor(0x33, 0x33, 0x33)
+C_MGRAY  = RGBColor(0x6B, 0x6B, 0x6B)
+C_LGRAY  = RGBColor(0xF5, 0xF5, 0xF5)
+C_BORDER = RGBColor(0xE0, 0xE0, 0xE0)
 C_WHITE  = RGBColor(0xFF, 0xFF, 0xFF)
-C_GREEN  = RGBColor(0x00, 0x7A, 0x3D)   # 求职绿
+C_GREEN  = RGBColor(0x00, 0x7A, 0x3D)
+
+# ── AI 标签缓存（build 前由调用方写入）────────────────────────
+_ai_labels: dict = {}   # {login: {"ai_label": str, "ai_highlights": [str]}}
+
+
+def _apply_theme(theme_name: str):
+    """将主题色系应用到全局 C_* 变量。需在 build_ppt() 最开始调用。"""
+    global C_RED, C_DRED, C_DARKRED, C_DGRAY, C_MGRAY, C_LGRAY, C_BORDER
+    t = THEMES.get(theme_name, THEMES["华为经典"])
+    C_RED     = RGBColor(*t["primary"])
+    C_DRED    = RGBColor(*t["primary_mid"])
+    C_DARKRED = RGBColor(*t["bg_panel"])
+    C_DGRAY   = RGBColor(*t["text_main"])
+    C_MGRAY   = RGBColor(*t["text_sub"])
+    C_LGRAY   = RGBColor(*t["bg_card"])
+    C_BORDER  = RGBColor(*t["border"])
 
 # ── 尺寸 ─────────────────────────────────────────────────────
 SW = Cm(33.87)          # 16:9 宽
@@ -498,37 +570,55 @@ def _name_card(sl, cx, cy, row: dict, av_cache: dict):
     _rect(sl, int(TL), int(ty), int(TW * 0.92), int(Cm(0.05)), fill=C_RED)
     ty += Cm(0.18)
 
-    # 联系/基本信息
+    # ── AI 标签 or 联系/基本信息 ──────────────────────────────
     LINE_H = Cm(0.56)
+    ai = _ai_labels.get(login) or {}
+    ai_label = ai.get("ai_label", "")
+    ai_highlights = ai.get("ai_highlights") or []
 
-    def _blog_url(v):
-        if not v or str(v) in ("None", ""):
-            return None
-        return v if str(v).startswith("http") else "https://" + str(v)
+    if ai_label:
+        # AI 模式：显示一行人才标签 + 最多2条亮点
+        _txt(sl, ai_label,
+             int(TL), int(ty), int(TW), int(Cm(0.6)),
+             sz=8, color=C_DGRAY, wrap=True)
+        ty += Cm(0.65)
+        for hl in ai_highlights[:2]:
+            if ty + Cm(0.55) > cy + ch - Cm(0.2):
+                break
+            _txt(sl, f"• {hl}",
+                 int(TL), int(ty), int(TW), int(Cm(0.52)),
+                 sz=7.5, color=C_MGRAY, wrap=False)
+            ty += Cm(0.53)
+    else:
+        # 原始模式：显示结构化字段
+        def _blog_url(v):
+            if not v or str(v) in ("None", ""):
+                return None
+            return v if str(v).startswith("http") else "https://" + str(v)
 
-    def _twitter_url(v):
-        if not v or str(v) in ("None", ""):
-            return None
-        handle = str(v).lstrip("@")
-        return f"https://twitter.com/{handle}"
+        def _twitter_url(v):
+            if not v or str(v) in ("None", ""):
+                return None
+            handle = str(v).lstrip("@")
+            return f"https://twitter.com/{handle}"
 
-    info_fields = [
-        ("🔗", "GitHub", row.get("profile_url"),  row.get("profile_url")),
-        ("🏢", "公司",   row.get("company"),       None),
-        ("📍", "地区",   row.get("location"),      None),
-        ("📧", "邮箱",   row.get("email"),          f"mailto:{row.get('email')}" if row.get("email") and str(row.get("email")) not in ("None", "") else None),
-        ("🌐", "主页",   row.get("blog"),           _blog_url(row.get("blog"))),
-        ("🐦", "推特",   row.get("twitter_username"), _twitter_url(row.get("twitter_username"))),
-    ]
-    for icon, label, val, link in info_fields:
-        if ty + LINE_H > cy + ch - Cm(0.25):
-            break
-        if val and str(val) not in ("None", "", "0"):
-            _txt(sl, f"{icon} {label}：{val}",
-                 int(TL), int(ty), int(TW), int(LINE_H),
-                 sz=8.5, color=C_RED if link else C_DGRAY, wrap=False,
-                 url=link)
-            ty += LINE_H
+        info_fields = [
+            ("🔗", "GitHub", row.get("profile_url"),  row.get("profile_url")),
+            ("🏢", "公司",   row.get("company"),       None),
+            ("📍", "地区",   row.get("location"),      None),
+            ("📧", "邮箱",   row.get("email"),          f"mailto:{row.get('email')}" if row.get("email") and str(row.get("email")) not in ("None", "") else None),
+            ("🌐", "主页",   row.get("blog"),           _blog_url(row.get("blog"))),
+            ("🐦", "推特",   row.get("twitter_username"), _twitter_url(row.get("twitter_username"))),
+        ]
+        for icon, label, val, link in info_fields:
+            if ty + LINE_H > cy + ch - Cm(0.25):
+                break
+            if val and str(val) not in ("None", "", "0"):
+                _txt(sl, f"{icon} {label}：{val}",
+                     int(TL), int(ty), int(TW), int(LINE_H),
+                     sz=8.5, color=C_RED if link else C_DGRAY, wrap=False,
+                     url=link)
+                ty += LINE_H
 
 
 def _slide_summary(prs, rows: list, repo: str, pg_start: int,
@@ -668,9 +758,30 @@ def _slide_contributor(prs, row: dict, df: pd.DataFrame, pg: int, total: int,
     _txt(sl, f"@{login}", int(NL), int(AV_T + Cm(1.35)), int(LW - NL - Cm(0.3)), Cm(0.65),
          sz=10, color=C_RED)
 
-    # Bio
+    # AI 标签 or Bio
     bio_y = AV_T + AV_SIZE + Cm(0.4)
-    if row.get("bio") and str(row["bio"]) not in ("None", ""):
+    ai = _ai_labels.get(login) or {}
+    ai_label = ai.get("ai_label", "")
+    ai_highlights = ai.get("ai_highlights") or []
+
+    if ai_label:
+        # AI 人才标签（主色，醒目）
+        _txt(sl, ai_label, Cm(0.7), bio_y, LW - Cm(1.0), Cm(0.72),
+             sz=9, bold=True, color=C_RED, wrap=False)
+        info_y = bio_y + Cm(0.82)
+        # AI 亮点（3条子弹）
+        if ai_highlights:
+            for hl in ai_highlights[:3]:
+                _txt(sl, f"▸ {hl}", Cm(0.7), info_y, LW - Cm(1.0), Cm(0.6),
+                     sz=8.5, color=C_DGRAY, wrap=False)
+                info_y += Cm(0.62)
+            info_y += Cm(0.1)
+        # Bio 作为补充（较小）
+        if row.get("bio") and str(row["bio"]) not in ("None", ""):
+            _txt(sl, str(row["bio"]), Cm(0.7), info_y, LW - Cm(1.0), Cm(1.0),
+                 sz=7.5, italic=True, color=C_MGRAY, wrap=True)
+            info_y += Cm(1.1)
+    elif row.get("bio") and str(row["bio"]) not in ("None", ""):
         _txt(sl, str(row["bio"]), Cm(0.7), bio_y, LW - Cm(1.0), Cm(1.2),
              sz=8.5, italic=True, color=C_MGRAY, wrap=True)
         info_y = bio_y + Cm(1.35)
@@ -790,8 +901,13 @@ def _add_repo_slides(prs, repo: str, df: pd.DataFrame, selected_logins: list,
     return 1 + 1 + n_summary_pages + n_sel
 
 
-def build_ppt(repo: str, df: pd.DataFrame, selected_logins: list) -> io.BytesIO:
-    """单仓库 PPT（现有接口不变）。"""
+def build_ppt(repo: str, df: pd.DataFrame, selected_logins: list,
+              theme: str = "华为经典", ai_labels: dict | None = None) -> io.BytesIO:
+    """单仓库 PPT。"""
+    _apply_theme(theme)
+    global _ai_labels
+    _ai_labels = ai_labels or {}
+
     prs = Presentation()
     prs.slide_width  = SW
     prs.slide_height = SH
@@ -877,11 +993,16 @@ def _slide_batch_cover(prs, repos_data: list):
          sz=9, color=C_MGRAY)
 
 
-def build_batch_ppt(repos_data: list) -> io.BytesIO:
+def build_batch_ppt(repos_data: list,
+                    theme: str = "华为经典", ai_labels: dict | None = None) -> io.BytesIO:
     """
     合并多仓库 PPT。
     repos_data = [{"repo": "owner/repo", "df": df, "logins": [...]}]
     """
+    _apply_theme(theme)
+    global _ai_labels
+    _ai_labels = ai_labels or {}
+
     prs = Presentation()
     prs.slide_width  = SW
     prs.slide_height = SH
@@ -1192,9 +1313,104 @@ if st.session_state["ppt_repos"]:
         st.info("没有符合条件的贡献者，请调整筛选条件。")
         st.stop()
 
-    # ── 操作区：导出 CSV / 生成 PPT ──────────────────────────
+    # ── 操作区：主题 / AI 增强 / 导出 CSV / 生成 PPT ─────────
+    st.markdown("---")
+    st.subheader("③ 主题 & AI 增强")
+
+    _THEME_SWATCHES = {
+        "华为经典": "#C7000B",
+        "深海蓝":   "#1A56AB",
+        "森林绿":   "#1E7A4E",
+        "暮光紫":   "#6B3FA0",
+        "极简灰":   "#2D3A4A",
+    }
+    tc1, tc2 = st.columns([3, 2])
+    with tc1:
+        theme_labels = [
+            f"{name}  ●" for name in _THEME_SWATCHES
+        ]
+        _theme_name_list = list(_THEME_SWATCHES.keys())
+        selected_theme_idx = st.radio(
+            "配色主题",
+            options=range(len(_theme_name_list)),
+            format_func=lambda i: _theme_name_list[i],
+            horizontal=True,
+            key="ppt_theme",
+        )
+        selected_theme = _theme_name_list[selected_theme_idx]
+        # 显示色块预览
+        swatch_html = "".join(
+            f"<span style='display:inline-block;width:18px;height:18px;"
+            f"border-radius:3px;background:{color};"
+            f"margin-right:6px;vertical-align:middle;"
+            f"{'outline:2px solid #555;' if name==selected_theme else ''}'"
+            f"title='{name}'></span>"
+            for name, color in _THEME_SWATCHES.items()
+        )
+        st.markdown(swatch_html, unsafe_allow_html=True)
+
+    with tc2:
+        # AI 增强
+        _default_api_key = (
+            st.secrets.get("ANTHROPIC_API_KEY", "")
+            if hasattr(st, "secrets") else ""
+        ) or ""
+        ai_api_key = st.text_input(
+            "Anthropic API Key（可选）",
+            value=_default_api_key,
+            type="password",
+            placeholder="sk-ant-… 留空则跳过 AI 增强",
+            key="ppt_ai_key",
+        )
+        if "ppt_ai_labels" not in st.session_state:
+            st.session_state["ppt_ai_labels"] = {}
+
+        ai_btn_disabled = not ai_api_key.strip()
+        if st.button(
+            "✨ AI 生成人才标签",
+            disabled=ai_btn_disabled,
+            use_container_width=True,
+            key="ppt_ai_btn",
+            help="调用 Claude Haiku 批量生成 ai_label 和亮点，每 10 人一批",
+        ):
+            rows_for_ai = [
+                row.to_dict()
+                for _, row in df_filtered.iterrows()
+            ]
+            prog = st.progress(0, text="AI 增强中…")
+            try:
+                from ppt_llm import enrich_with_ai
+                def _ai_progress(done, total):
+                    prog.progress(done / total, text=f"AI 增强 {done}/{total}…")
+                st.session_state["ppt_ai_labels"] = enrich_with_ai(
+                    rows_for_ai, ai_api_key.strip(), progress_cb=_ai_progress
+                )
+                prog.empty()
+                st.success(f"✅ AI 标签生成完毕，共 {len(st.session_state['ppt_ai_labels'])} 人")
+            except Exception as e:
+                prog.empty()
+                st.error(f"AI 增强失败：{e}")
+
+        if st.session_state["ppt_ai_labels"]:
+            n_ai = len(st.session_state["ppt_ai_labels"])
+            st.caption(f"已缓存 {n_ai} 人的 AI 标签（重新筛选后建议重新生成）")
+            if st.button("🗑️ 清除 AI 标签", key="ppt_clear_ai"):
+                st.session_state["ppt_ai_labels"] = {}
+                st.rerun()
+
     st.markdown("---")
     ac1, ac2 = st.columns(2)
+
+    # 预估页数（供两个按钮共用）
+    repos_logins: dict[str, list] = {}
+    for _, row in df_filtered.iterrows():
+        repos_logins.setdefault(row["_repo"], []).append(row["login"])
+    n_multi = len(repos_logins) > 1
+    total_pages = 1 if n_multi else 0
+    for logins in repos_logins.values():
+        n_s = len(logins)
+        n_sum = max(1, math.ceil(n_s / _SUMMARY_PER_PAGE)) if n_s else 1
+        total_pages += 1 + 1 + n_sum + n_s
 
     with ac1:
         csv_bytes = (
@@ -1212,17 +1428,6 @@ if st.session_state["ppt_repos"]:
         )
 
     with ac2:
-        # 预估页数
-        repos_logins: dict[str, list] = {}
-        for _, row in df_filtered.iterrows():
-            repos_logins.setdefault(row["_repo"], []).append(row["login"])
-        n_multi = len(repos_logins) > 1
-        total_pages = 1 if n_multi else 0
-        for logins in repos_logins.values():
-            n_s = len(logins)
-            n_sum = max(1, math.ceil(n_s / _SUMMARY_PER_PAGE)) if n_s else 1
-            total_pages += 1 + 1 + n_sum + n_s
-
         if st.button(
             f"🚀 生成 PPT（预计 {total_pages} 页）",
             type="primary",
@@ -1243,12 +1448,15 @@ if st.session_state["ppt_repos"]:
                         st.error("没有可用数据，请检查仓库。")
                         st.stop()
 
+                    _ai = st.session_state.get("ppt_ai_labels") or {}
                     if len(repos_data) == 1:
                         item = repos_data[0]
-                        ppt_buf = build_ppt(item["repo"], item["df"], item["logins"])
+                        ppt_buf = build_ppt(item["repo"], item["df"], item["logins"],
+                                            theme=selected_theme, ai_labels=_ai)
                         fname = f"contributors_{item['repo'].replace('/', '_')}.pptx"
                     else:
-                        ppt_buf = build_batch_ppt(repos_data)
+                        ppt_buf = build_batch_ppt(repos_data,
+                                                  theme=selected_theme, ai_labels=_ai)
                         slug = "_".join(r["repo"].replace("/", "-") for r in repos_data[:3])
                         fname = f"batch_contributors_{slug}.pptx"
 
