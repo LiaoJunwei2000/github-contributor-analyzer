@@ -71,8 +71,9 @@ def enrich_with_ai(rows: list, api_key: str, progress_cb=None) -> dict:
         ]
         prompt = _PROMPT_TMPL.format(
             n=len(people),
-            people_json=json.dumps(people, ensure_ascii=False, indent=2),
+            people_json=json.dumps(people, ensure_ascii=True, indent=2),
         )
+        last_error = None
         try:
             resp = client.messages.create(
                 model="claude-haiku-4-5-20251001",
@@ -91,11 +92,15 @@ def enrich_with_ai(rows: list, api_key: str, progress_cb=None) -> dict:
                         break
             parsed = json.loads(text)
             result.update(parsed)
-        except Exception:
+        except Exception as exc:
+            last_error = exc
             # 单批次失败不中断，继续下一批
-            pass
 
         if progress_cb:
             progress_cb(min(i + batch_size, len(rows)), len(rows))
+
+    # 若全部批次都失败且结果为空，向上抛出最后一个错误
+    if not result and last_error is not None:
+        raise last_error
 
     return result

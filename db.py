@@ -93,6 +93,7 @@ def init_db():
     else:
         _init_sqlite()
     _migrate_hf_tables()
+    _migrate_location_cache()
 
 
 def _migrate_hf_tables():
@@ -123,6 +124,27 @@ def _migrate_hf_tables():
                         cur.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_type}")
                 except Exception:
                     pass  # 列已存在时 SQLite 会报错，忽略即可
+
+
+def _migrate_location_cache():
+    """幂等创建 location_cache 表（已有 DB 安全追加）。"""
+    with _get_cursor() as cur:
+        if _use_postgres():
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS location_cache (
+                    raw_location  TEXT PRIMARY KEY,
+                    regions       TEXT NOT NULL,
+                    classified_at TEXT
+                )
+            """)
+        else:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS location_cache (
+                    raw_location  TEXT PRIMARY KEY,
+                    regions       TEXT NOT NULL,
+                    classified_at TEXT
+                )
+            """)
 
 
 def _init_postgres():
@@ -1044,3 +1066,60 @@ def get_hf_org_complete_profiles(org_name: str) -> Dict[str, Dict]:
             (org_name,),
         )
         return {row["username"]: dict(row) for row in cur.fetchall()}
+
+
+# ── Location Cache CRUD ───────────────────────────────────────────
+
+def get_location_regions(raw_location: str) -> List[str] | None:
+    """查询地点分类缓存。返回 list[str] 或 None（未缓存）。"""
+    import json
+    if not raw_location or not raw_location.strip():
+        return None
+    p = _ph()
+    with _get_cursor() as cur:
+        cur.execute(
+            f"SELECT regions FROM location_cache WHERE raw_location = {p}",
+            (raw_location,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        return json.loads(row["regions"])
+
+
+def upsert_location_regions(raw_location: str, regions: list):
+    """写入/更新地点分类缓存。"""
+    import json
+    if not raw_location or not raw_location.strip():
+        return
+    p = _ph()
+    regions_json = json.dumps(regions, ensure_ascii=False)
+    with _get_cursor() as cur:
+        if _use_postgres():
+            cur.execute(
+                f"""INSERT INTO location_cache (raw_location, regions, classified_at)
+                    VALUES ({p},{p},{p})
+                    ON CONFLICT (raw_location) DO UPDATE SET
+                        regions={p}, classified_at={p}""",
+                (raw_location, regions_json, _now(), regions_json, _now()),
+            )
+        else:
+            cur.execute(
+                f"""INSERT OR REPLACE INTO location_cache
+                    (raw_location, regions, classified_at) VALUES ({p},{p},{p})""",
+                (raw_location, regions_json, _now()),
+            )
+
+
+def get_all_location_cache() -> Dict[str, List]:
+    """返回全量缓存快照 {raw_location: list[str]}，一次查询。"""
+    import json
+    try:
+        with _get_cursor() as cur:
+            cur.execute("SELECT raw_location, regions FROM location_cache")
+            return {
+                row["raw_location"]: json.loads(row["regions"])
+                for row in cur.fetchall()
+            }
+    except Exception:
+        return {}

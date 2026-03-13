@@ -52,10 +52,16 @@ hf_history = st.Page(
     title="HF 历史",
     icon="🗂️",
 )
+insight = st.Page(
+    "pages/insight_report.py",
+    title="洞察报告",
+    icon="🔬",
+)
 
 pg = st.navigation({
     "🐙 GitHub": [scraper, batch, history, ppt, tags],
     "🤗 Hugging Face": [hf_scraper, hf_history],
+    "📋 报告": [insight],
     "其他": [manual],
 })
 
