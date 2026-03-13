@@ -8,3 +8,5 @@ dist/
 *.egg-info/
 contributors.db
 .streamlit/secrets.toml
+.DS_Store
+**/.DS_Store
